@@ -105,6 +105,16 @@ const PRIORITY_META = {
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
 
+const TYPE_COLORS: Record<string, string> = {
+  feature: "#34d399",
+  bugfix: "#fb923c",
+  task: "#2dd4bf",
+  milestone: "#facc15",
+  learning: "#a78bfa",
+  optimized: "#22d3ee",
+  refactor: "#c084fc",
+};
+
 const COMPLEXITY_META = {
   simple: { label: "Simple", text: "text-teal-400", bg: "bg-teal-400/10" },
   hard: { label: "Hard", text: "text-orange-400", bg: "bg-orange-400/10" },
@@ -1213,7 +1223,7 @@ export default function ProjectDashboard() {
         onImageClick={setZoomSrc}
       />
 
-      <ProfilePanel open={profileOpen} onClose={() => setProfileOpen(false)} />
+      <ProfilePanel open={profileOpen} onClose={() => setProfileOpen(false)} entries={entries} />
       <AddEntryModal
         open={formOpen || editingEntry !== null}
         initialEntry={editingEntry ?? undefined}
@@ -1531,10 +1541,53 @@ function ProfileButton({
 function ProfilePanel({
   open,
   onClose,
+  entries,
 }: {
   open: boolean;
   onClose: () => void;
+  entries: Entry[];
 }) {
+  const projects = useMemo(
+    () => Array.from(new Set(entries.map((e) => e.project))),
+    [entries],
+  );
+
+  const projectMetrics = useMemo(
+    () =>
+      projects.map((proj) => {
+        const tasks = entries
+          .filter((e) => e.project === proj)
+          .flatMap((e) => e.tasks);
+        const total = tasks.length;
+        const done = tasks.filter((t) => t.status === "done").length;
+        const typeCounts = Object.fromEntries(
+          Object.keys(TYPE_META).map((k) => [
+            k,
+            tasks.filter((t) => (t.type ?? "task") === k).length,
+          ]),
+        );
+        return { project: proj, total, done, typeCounts };
+      }),
+    [entries, projects],
+  );
+
+  const overallStats = useMemo(() => {
+    const allTasks = entries.flatMap((e) => e.tasks);
+    const total = allTasks.length;
+    const typeCounts = Object.fromEntries(
+      Object.keys(TYPE_META).map((k) => [
+        k,
+        allTasks.filter((t) => (t.type ?? "task") === k).length,
+      ]),
+    );
+    return { total, typeCounts };
+  }, [entries]);
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
   return (
     <>
       <div
@@ -1544,62 +1597,272 @@ function ProfilePanel({
         }`}
       />
       <div
-        className={`fixed z-40 top-4 right-4 left-4 sm:left-auto sm:w-80 rounded-2xl border border-emerald-900/50 bg-slate-900/95 backdrop-blur-md shadow-2xl shadow-black/40 transition-all duration-300 ${
+        className={`fixed z-40 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100%-2rem)] max-w-2xl max-h-[88vh] flex flex-col rounded-2xl border border-emerald-900/50 bg-slate-900/95 backdrop-blur-md shadow-2xl shadow-black/40 transition-all duration-300 ${
           open
-            ? "opacity-100 translate-y-0"
-            : "opacity-0 -translate-y-3 pointer-events-none"
+            ? "opacity-100 scale-100"
+            : "opacity-0 scale-95 pointer-events-none"
         }`}
       >
-        <div className="p-5 sm:p-6">
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-[11px] font-bold tracking-[0.25em] uppercase text-emerald-400">
-              Profile
-            </span>
-            <button
-              onClick={onClose}
-              className="text-slate-500 hover:text-slate-300"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          <div className="flex items-center gap-3 mb-5">
-            <span className="flex items-center justify-center w-12 h-12 rounded-full bg-emerald-400/15 text-emerald-300 font-serif text-lg ring-1 ring-emerald-400/30">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <span className="text-xs font-bold tracking-[0.25em] uppercase text-emerald-400">
+            Developer Profile
+          </span>
+          <button
+            onClick={onClose}
+            className="text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto p-5 sm:p-6 flex flex-col gap-5">
+          {/* Identity */}
+          <div className="flex items-center gap-4">
+            <span className="flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-emerald-400/15 text-emerald-300 font-serif text-2xl sm:text-3xl ring-1 ring-emerald-400/30 shrink-0">
               {PROFILE.avatarInitials}
             </span>
             <div>
-              <div className="font-serif text-lg text-slate-50 leading-tight">
+              <div className="font-serif text-2xl sm:text-3xl text-slate-50 leading-tight">
                 {PROFILE.name}
               </div>
-              <div className="text-xs text-slate-400">{PROFILE.role}</div>
-            </div>
-          </div>
-          <div className="flex flex-col gap-3 text-sm">
-            <div className="flex items-center gap-2.5 text-slate-300">
-              <Building2 size={15} className="text-emerald-400 shrink-0" />
-              <span>
-                <span className="text-slate-500">Department: </span>
-                {PROFILE.department}
-              </span>
-            </div>
-            <div className="flex items-start gap-2.5 text-slate-300">
-              <FolderKanban
-                size={15}
-                className="text-emerald-400 shrink-0 mt-0.5"
-              />
-              <div>
-                <span className="text-slate-500">Projects handled:</span>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {PROFILE.projectsHandled.map((p) => (
-                    <span
-                      key={p}
-                      className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/20"
-                    >
-                      {p}
-                    </span>
-                  ))}
-                </div>
+              <div className="text-sm sm:text-base text-slate-400 mt-0.5">
+                {PROFILE.role}
+              </div>
+              <div className="flex items-center gap-1.5 mt-1">
+                <Building2 size={13} className="text-emerald-400" />
+                <span className="text-sm text-slate-500">
+                  {PROFILE.department}
+                </span>
               </div>
             </div>
+          </div>
+
+          {/* Overall type breakdown */}
+          {overallStats.total > 0 && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold tracking-[0.25em] uppercase text-slate-500">
+                  Overall Breakdown
+                </span>
+                <span className="text-xs text-slate-600">
+                  {overallStats.total} total tasks
+                </span>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                {(
+                  Object.entries(TYPE_META) as [
+                    string,
+                    (typeof TYPE_META)[keyof typeof TYPE_META],
+                  ][]
+                ).map(([key, meta]) => {
+                  const count = overallStats.typeCounts[key] ?? 0;
+                  if (count === 0) return null;
+                  const pct = Math.round((count / overallStats.total) * 100);
+                  const Icon = meta.icon;
+                  return (
+                    <div
+                      key={key}
+                      className={`rounded-lg ${meta.bg} ring-1 ${meta.ring} px-2.5 py-2 flex flex-col gap-0.5`}
+                    >
+                      <div className={`flex items-center gap-1 ${meta.text}`}>
+                        <Icon size={11} />
+                        <span className="text-[10px] font-bold uppercase tracking-wide leading-none">
+                          {meta.label}
+                        </span>
+                      </div>
+                      <div className="flex items-baseline gap-1 mt-0.5">
+                        <span className={`text-xl font-bold font-serif leading-none ${meta.text}`}>
+                          {count}
+                        </span>
+                        <span className="text-xs text-slate-500">{pct}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Stacked progress bar */}
+              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden flex">
+                {(
+                  Object.entries(TYPE_META) as [
+                    string,
+                    (typeof TYPE_META)[keyof typeof TYPE_META],
+                  ][]
+                ).map(([key, meta]) => {
+                  const count = overallStats.typeCounts[key] ?? 0;
+                  if (count === 0) return null;
+                  const pct = (count / overallStats.total) * 100;
+                  return (
+                    <div
+                      key={key}
+                      style={{ width: `${pct}%`, backgroundColor: TYPE_COLORS[key] }}
+                      className="h-full"
+                      title={`${meta.label}: ${count} (${Math.round(pct)}%)`}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* Description */}
+              {(() => {
+                const map: Record<string, [number, string]> = {
+                  feature:   [overallStats.typeCounts["feature"]   ?? 0, "feature"],
+                  bugfix:    [overallStats.typeCounts["bugfix"]    ?? 0, "bug fix"],
+                  optimized: [overallStats.typeCounts["optimized"] ?? 0, "optimization"],
+                  refactor:  [overallStats.typeCounts["refactor"]  ?? 0, "refactor"],
+                  task:      [overallStats.typeCounts["task"]      ?? 0, "task"],
+                  milestone: [overallStats.typeCounts["milestone"] ?? 0, "milestone"],
+                  learning:  [overallStats.typeCounts["learning"]  ?? 0, "learning"],
+                };
+                const verbs: Record<string, string> = {
+                  feature: "shipped", bugfix: "resolved", optimized: "optimized",
+                  refactor: "refactored", task: "completed", milestone: "hit", learning: "logged",
+                };
+                const parts = Object.entries(map)
+                  .filter(([, [n]]) => n > 0)
+                  .map(([k, [n, label]]) => `${verbs[k]} ${n} ${label}${n !== 1 ? "s" : ""}`);
+
+                const sentence =
+                  parts.length > 1
+                    ? parts.slice(0, -1).join(", ") + ", and " + parts[parts.length - 1]
+                    : parts[0] ?? "";
+
+                const sorted = Object.entries(overallStats.typeCounts).sort(([, a], [, b]) => b - a);
+                const topKey = sorted[0]?.[0] ?? "";
+                const topMeta = TYPE_META[topKey as keyof typeof TYPE_META];
+                const topPct = Math.round(((sorted[0]?.[1] ?? 0) / overallStats.total) * 100);
+
+                return (
+                  <p className="text-xs text-slate-400 leading-relaxed pt-1">
+                    Nel has {sentence} — with{" "}
+                    {topMeta && (
+                      <span className={topMeta.text}>{topMeta.label}</span>
+                    )}{" "}
+                    leading at{" "}
+                    <span className="text-emerald-300 font-semibold">{topPct}%</span>{" "}
+                    of all work logged across all projects.
+                  </p>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Metrics by project */}
+          <div className="flex flex-col gap-3">
+            <div className="text-xs font-bold tracking-[0.25em] uppercase text-slate-500">
+              Metrics by Project
+            </div>
+            {projectMetrics.map((pm) => (
+              <div
+                key={pm.project}
+                className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 flex flex-col gap-3"
+              >
+                {/* Project header */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <FolderKanban size={14} className="text-emerald-400" />
+                    <span className="text-base font-semibold text-slate-200">
+                      {pm.project}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500 shrink-0 text-right">
+                    {pm.total} tasks · {pm.done} done
+                    {pm.total > 0 && (
+                      <span className="text-emerald-400/70 ml-1">
+                        ({Math.round((pm.done / pm.total) * 100)}%)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Type breakdown grid */}
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                  {(
+                    Object.entries(TYPE_META) as [
+                      string,
+                      (typeof TYPE_META)[keyof typeof TYPE_META],
+                    ][]
+                  ).map(([key, meta]) => {
+                    const count = pm.typeCounts[key] ?? 0;
+                    if (count === 0) return null;
+                    const pct =
+                      pm.total > 0
+                        ? Math.round((count / pm.total) * 100)
+                        : 0;
+                    const Icon = meta.icon;
+                    return (
+                      <div
+                        key={key}
+                        className={`rounded-lg ${meta.bg} ring-1 ${meta.ring} px-2.5 py-2 flex flex-col gap-0.5`}
+                      >
+                        <div
+                          className={`flex items-center gap-1 ${meta.text}`}
+                        >
+                          <Icon size={11} />
+                          <span className="text-[10px] font-bold uppercase tracking-wide leading-none">
+                            {meta.label}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline gap-1 mt-0.5">
+                          <span
+                            className={`text-xl font-bold font-serif leading-none ${meta.text}`}
+                          >
+                            {count}
+                          </span>
+                          <span className="text-xs text-slate-500">
+                            {pct}%
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Stacked progress bar */}
+                {pm.total > 0 && (
+                  <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden flex">
+                    {(
+                      Object.entries(TYPE_META) as [
+                        string,
+                        (typeof TYPE_META)[keyof typeof TYPE_META],
+                      ][]
+                    ).map(([key, meta]) => {
+                      const count = pm.typeCounts[key] ?? 0;
+                      if (count === 0) return null;
+                      const pct = (count / pm.total) * 100;
+                      return (
+                        <div
+                          key={key}
+                          style={{
+                            width: `${pct}%`,
+                            backgroundColor: TYPE_COLORS[key],
+                          }}
+                          className="h-full"
+                          title={`${meta.label}: ${count} (${Math.round(pct)}%)`}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Projects handled */}
+          <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-800/60">
+            <FolderKanban size={14} className="text-slate-500" />
+            <span className="text-xs font-bold uppercase tracking-widest text-slate-500">
+              Projects
+            </span>
+            {PROFILE.projectsHandled.map((p) => (
+              <span
+                key={p}
+                className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/20"
+              >
+                {p}
+              </span>
+            ))}
           </div>
         </div>
       </div>

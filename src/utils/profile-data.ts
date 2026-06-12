@@ -8,4 +8,8 @@ export const PROFILE = {
   department: "ITD",
   projectsHandled: ["VC+ App", "VC+ CMS"],
   avatarInitials: "WZ",
+  projectComments: {
+    "VC+": "Consistently delivering sharp features, clean optimizations, and reliable fixes that elevate the core app experience for every user.",
+    "VC+ CMS": "Keeping content operations smooth and dependable — building tools that empower the team and keep the platform running at its best.",
+  } as Record<string, string>,
 };
