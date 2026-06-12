@@ -3,7 +3,6 @@ import type { ComponentType } from "react";
 import {
   CheckCircle2,
   Bug,
-  Clock3,
   Search,
   Folder,
   Image as ImageIcon,
@@ -19,6 +18,9 @@ import {
   Plus,
   Pencil,
   Trash2,
+  Zap,
+  Eye,
+  RefreshCw,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
 import type { CompareItem, Entry, Task } from "./utils/entries/entries";
@@ -64,6 +66,20 @@ const TYPE_META = {
     bg: "bg-violet-400/10",
     ring: "ring-violet-400/20",
   },
+  optimized: {
+    label: "Optimized",
+    icon: Zap,
+    text: "text-cyan-400",
+    bg: "bg-cyan-400/10",
+    ring: "ring-cyan-400/20",
+  },
+  refactor: {
+    label: "Refactor",
+    icon: RefreshCw,
+    text: "text-purple-400",
+    bg: "bg-purple-400/10",
+    ring: "ring-purple-400/20",
+  },
 };
 
 const PRIORITY_META = {
@@ -86,6 +102,8 @@ const PRIORITY_META = {
     dot: "bg-blue-400",
   },
 };
+
+const PRIORITY_RANK: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
 
 const COMPLEXITY_META = {
   simple: { label: "Simple", text: "text-teal-400", bg: "bg-teal-400/10" },
@@ -182,10 +200,13 @@ export default function ProjectDashboard() {
     tags: [] as string[],
   });
   const [backlogTagFilter, setBacklogTagFilter] = useState("all");
+  const [backlogPage, setBacklogPage] = useState(1);
+  const [inProgressPage, setInProgressPage] = useState(1);
   const [page, setPage] = useState(1);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [zoomSrc, setZoomSrc] = useState<string | null>(null);
+  const [viewingEntry, setViewingEntry] = useState<Entry | null>(null);
 
   useEffect(() => {
     supabase
@@ -209,6 +230,10 @@ export default function ProjectDashboard() {
   useEffect(() => {
     setPage(1);
   }, [project, type, status, search, dateFrom, dateTo]);
+
+  useEffect(() => {
+    setBacklogPage(1);
+  }, [backlogTagFilter]);
 
   const projects = useMemo(
     () => Array.from(new Set(entries.map((e) => e.project))),
@@ -258,7 +283,12 @@ export default function ProjectDashboard() {
         }
       });
     });
-    all.sort((a, b) => a.entryDate.localeCompare(b.entryDate));
+    all.sort((a, b) => {
+      const pa = PRIORITY_RANK[a.task.priority ?? ""] ?? 3;
+      const pb = PRIORITY_RANK[b.task.priority ?? ""] ?? 3;
+      if (pa !== pb) return pa - pb;
+      return a.entryDate.localeCompare(b.entryDate);
+    });
     for (const item of all) {
       if (!seen.has(item.task.title)) seen.set(item.task.title, item);
     }
@@ -310,7 +340,7 @@ export default function ProjectDashboard() {
     const allTasks = base.flatMap((e) => e.tasks);
     return {
       total: allTasks.length,
-      done: allTasks.filter((t) => t.status === "done").length,
+      optimized: allTasks.filter((t) => t.type === "optimized").length,
       features: allTasks.filter((t) => t.type === "feature").length,
       bugs: allTasks.filter((t) => t.type === "bugfix").length,
     };
@@ -560,7 +590,6 @@ export default function ProjectDashboard() {
   const hasFilters =
     project !== "all" ||
     type !== "all" ||
-    status !== "all" ||
     search.trim() ||
     dateFrom ||
     dateTo;
@@ -609,14 +638,14 @@ export default function ProjectDashboard() {
             onClick={clearTypeStatus}
           />
           <StatCard
-            label="Completed"
-            value={stats.done}
-            accent="border-emerald-400/60"
+            label="Optimized"
+            value={stats.optimized}
+            accent="border-cyan-400/60"
             delay={60}
-            active={status === "done"}
+            active={type === "optimized"}
             onClick={() => {
-              setStatus(status === "done" ? "all" : "done");
-              setType("all");
+              setType(type === "optimized" ? "all" : "optimized");
+              setStatus("all");
             }}
           />
           <StatCard
@@ -646,210 +675,264 @@ export default function ProjectDashboard() {
         {/* ── In Progress + Planned panels ───────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
           {/* In Progress */}
-          <section className="flex flex-col gap-3 p-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/5">
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse shrink-0" />
-              <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-yellow-400">
-                In Progress
-              </span>
-              <span className="text-[11px] text-slate-600">
-                {inProgressItems.length}
-              </span>
-            </div>
-            {inProgressItems.length === 0 ? (
-              <p className="text-xs text-slate-600 py-2">
-                No tasks in progress.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-2">
-                {inProgressItems.map((item, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2.5 py-2 border-b border-yellow-400/10 last:border-0"
-                  >
-                    <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-slate-200 leading-snug">
-                        {item.task.title}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-1 mt-1">
-                        {item.task.priority && (
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}
-                          >
-                            {PRIORITY_META[item.task.priority].label}
-                          </span>
-                        )}
-                        {item.task.complexity && (
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
-                          >
-                            {COMPLEXITY_META[item.task.complexity].label}
-                          </span>
-                        )}
-                        {(item.task.tags ?? []).map((tag) => {
-                          const s = TASK_TAG_STYLE[tag];
-                          return (
-                            <span
-                              key={tag}
-                              className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+          {(() => {
+            const IP_PER_PAGE = 5;
+            const ipTotalPages = Math.ceil(inProgressItems.length / IP_PER_PAGE);
+            const pagedIP = inProgressItems.slice(
+              (inProgressPage - 1) * IP_PER_PAGE,
+              inProgressPage * IP_PER_PAGE,
+            );
+            return (
+              <section className="flex flex-col gap-3 p-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/5">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse shrink-0" />
+                  <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-yellow-400">
+                    In Progress
+                  </span>
+                  <span className="text-[11px] text-slate-600">
+                    {inProgressItems.length}
+                  </span>
+                </div>
+                {inProgressItems.length === 0 ? (
+                  <p className="text-xs text-slate-600 py-2">No tasks in progress.</p>
+                ) : (
+                  <>
+                    <ul className="flex flex-col gap-2">
+                      {pagedIP.map((item, i) => (
+                        <li
+                          key={i}
+                          className="flex items-start gap-2.5 py-2 border-b border-yellow-400/10 last:border-0"
+                        >
+                          <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-slate-200 leading-snug">
+                              {item.task.title}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-1 mt-1">
+                              {item.task.priority && (
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}
+                                >
+                                  {PRIORITY_META[item.task.priority].label}
+                                </span>
+                              )}
+                              {item.task.complexity && (
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
+                                >
+                                  {COMPLEXITY_META[item.task.complexity].label}
+                                </span>
+                              )}
+                              {(item.task.tags ?? []).map((tag) => {
+                                const s = TASK_TAG_STYLE[tag];
+                                return (
+                                  <span
+                                    key={tag}
+                                    className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+                                  >
+                                    #{tag}
+                                  </span>
+                                );
+                              })}
+                              <span className="text-[10px] text-slate-600">
+                                started {formatDate(item.entryDate)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => markTaskDone(item.task.title)}
+                              disabled={actionLoading === item.task.title}
+                              className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors disabled:opacity-40 whitespace-nowrap"
                             >
-                              #{tag}
-                            </span>
-                          );
-                        })}
+                              ✓ Done
+                            </button>
+                            <button
+                              onClick={() => markTaskPlanned(item.task.title)}
+                              disabled={actionLoading === item.task.title}
+                              className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors disabled:opacity-40 whitespace-nowrap"
+                            >
+                              → Backlog
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    {ipTotalPages > 1 && (
+                      <div className="flex items-center justify-between pt-2 border-t border-yellow-400/10">
+                        <button
+                          onClick={() => setInProgressPage((p) => Math.max(1, p - 1))}
+                          disabled={inProgressPage === 1}
+                          className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
+                        >
+                          ← Prev
+                        </button>
                         <span className="text-[10px] text-slate-600">
-                          started {formatDate(item.entryDate)}
+                          {inProgressPage} / {ipTotalPages}
                         </span>
+                        <button
+                          onClick={() => setInProgressPage((p) => Math.min(ipTotalPages, p + 1))}
+                          disabled={inProgressPage === ipTotalPages}
+                          className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
+                        >
+                          Next →
+                        </button>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => markTaskDone(item.task.title)}
-                        disabled={actionLoading === item.task.title}
-                        className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors disabled:opacity-40 whitespace-nowrap"
-                      >
-                        ✓ Done
-                      </button>
-                      <button
-                        onClick={() => markTaskPlanned(item.task.title)}
-                        disabled={actionLoading === item.task.title}
-                        className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors disabled:opacity-40 whitespace-nowrap"
-                      >
-                        → Backlog
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+                    )}
+                  </>
+                )}
+              </section>
+            );
+          })()}
 
           {/* Planned / Backlog */}
-          <section className="flex flex-col gap-3 p-4 rounded-2xl border border-blue-400/20 bg-blue-400/5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
-                <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-blue-400">
-                  Backlog
-                </span>
-                <span className="text-[11px] text-slate-600">
-                  {filteredPlannedItems.length}
-                </span>
-              </div>
-              <button
-                onClick={() => {
-                  setQuickAdd({
-                    title: "",
-                    priority: "",
-                    complexity: "",
-                    tags: [],
-                  });
-                  setQuickAddOpen(true);
-                }}
-                className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
-              >
-                + Add planned task
-              </button>
-            </div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {["all", ...TASK_TAGS].map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() => setBacklogTagFilter(tag)}
-                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                    backlogTagFilter === tag
-                      ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
-                      : "border-slate-800 text-slate-500 hover:text-slate-400"
-                  }`}
-                >
-                  {tag === "all" ? "All" : `#${tag}`}
-                </button>
-              ))}
-            </div>
-            {filteredPlannedItems.length === 0 ? (
-              <p className="text-xs text-slate-600 py-2">
-                No planned tasks yet.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {filteredPlannedItems.map((item, i) => (
-                  <li
-                    key={item.task.title}
-                    draggable
-                    onDragStart={() => setDragIdx(i)}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setDragOverIdx(i);
-                    }}
-                    onDragLeave={() => setDragOverIdx(null)}
-                    onDrop={() => handleBacklogDrop(i)}
-                    onDragEnd={() => {
-                      setDragIdx(null);
-                      setDragOverIdx(null);
-                    }}
-                    className={`flex items-center gap-2.5 py-2 px-1 rounded-lg border transition-colors ${
-                      dragOverIdx === i && dragIdx !== i
-                        ? "border-blue-400/50 bg-blue-400/8"
-                        : "border-transparent"
-                    } border-b border-b-blue-400/10 last:border-b-0`}
-                  >
-                    <span className="text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 select-none text-sm leading-none">
-                      ⠿
+          {(() => {
+            const BL_PER_PAGE = 7;
+            const blTotalPages = Math.ceil(filteredPlannedItems.length / BL_PER_PAGE);
+            const pagedBL = filteredPlannedItems.slice(
+              (backlogPage - 1) * BL_PER_PAGE,
+              backlogPage * BL_PER_PAGE,
+            );
+            return (
+              <section className="flex flex-col gap-3 p-4 rounded-2xl border border-blue-400/20 bg-blue-400/5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                    <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-blue-400">
+                      Backlog
                     </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-slate-300 leading-snug">
-                        {item.task.title}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                        {item.task.priority && (
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}
+                    <span className="text-[11px] text-slate-600">
+                      {filteredPlannedItems.length}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setQuickAdd({ title: "", priority: "", complexity: "", tags: [] });
+                      setQuickAddOpen(true);
+                    }}
+                    className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
+                  >
+                    + Add planned task
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {["all", ...TASK_TAGS].map((tag) => (
+                    <button
+                      key={tag}
+                      onClick={() => setBacklogTagFilter(tag)}
+                      className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                        backlogTagFilter === tag
+                          ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
+                          : "border-slate-800 text-slate-500 hover:text-slate-400"
+                      }`}
+                    >
+                      {tag === "all" ? "All" : `#${tag}`}
+                    </button>
+                  ))}
+                </div>
+                {filteredPlannedItems.length === 0 ? (
+                  <p className="text-xs text-slate-600 py-2">No planned tasks yet.</p>
+                ) : (
+                  <>
+                    <ul className="flex flex-col gap-1">
+                      {pagedBL.map((item, pageLocalIdx) => {
+                        const realIdx = (backlogPage - 1) * BL_PER_PAGE + pageLocalIdx;
+                        return (
+                          <li
+                            key={item.task.title}
+                            draggable
+                            onDragStart={() => setDragIdx(realIdx)}
+                            onDragOver={(e) => { e.preventDefault(); setDragOverIdx(realIdx); }}
+                            onDragLeave={() => setDragOverIdx(null)}
+                            onDrop={() => handleBacklogDrop(realIdx)}
+                            onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
+                            className={`flex items-center gap-2.5 py-2 px-1 rounded-lg border transition-colors ${
+                              dragOverIdx === realIdx && dragIdx !== realIdx
+                                ? "border-blue-400/50 bg-blue-400/8"
+                                : "border-transparent"
+                            } border-b border-b-blue-400/10 last:border-b-0`}
                           >
-                            {PRIORITY_META[item.task.priority].label}
-                          </span>
-                        )}
-                        {item.task.complexity && (
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
-                          >
-                            {COMPLEXITY_META[item.task.complexity].label}
-                          </span>
-                        )}
-                        {(item.task.tags ?? []).map((tag) => {
-                          const s = TASK_TAG_STYLE[tag];
-                          return (
-                            <span
-                              key={tag}
-                              className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
-                            >
-                              #{tag}
+                            <span className="text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 select-none text-sm leading-none">
+                              ⠿
                             </span>
-                          );
-                        })}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-slate-300 leading-snug">
+                                {item.task.title}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                {item.task.priority && (
+                                  <span
+                                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}
+                                  >
+                                    {PRIORITY_META[item.task.priority].label}
+                                  </span>
+                                )}
+                                {item.task.complexity && (
+                                  <span
+                                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
+                                  >
+                                    {COMPLEXITY_META[item.task.complexity].label}
+                                  </span>
+                                )}
+                                {(item.task.tags ?? []).map((tag) => {
+                                  const s = TASK_TAG_STYLE[tag];
+                                  return (
+                                    <span
+                                      key={tag}
+                                      className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+                                    >
+                                      #{tag}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => startPlannedTask(item)}
+                                disabled={actionLoading === item.task.title}
+                                className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
+                              >
+                                ▶ Start
+                              </button>
+                              <button
+                                onClick={() => deleteBacklogTask(item)}
+                                className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                                title="Remove from backlog"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {blTotalPages > 1 && (
+                      <div className="flex items-center justify-between pt-2 border-t border-blue-400/10">
+                        <button
+                          onClick={() => setBacklogPage((p) => Math.max(1, p - 1))}
+                          disabled={backlogPage === 1}
+                          className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
+                        >
+                          ← Prev
+                        </button>
+                        <span className="text-[10px] text-slate-600">
+                          {backlogPage} / {blTotalPages}
+                        </span>
+                        <button
+                          onClick={() => setBacklogPage((p) => Math.min(blTotalPages, p + 1))}
+                          disabled={backlogPage === blTotalPages}
+                          className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
+                        >
+                          Next →
+                        </button>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => startPlannedTask(item)}
-                        disabled={actionLoading === item.task.title}
-                        className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
-                      >
-                        ▶ Start
-                      </button>
-                      <button
-                        onClick={() => deleteBacklogTask(item)}
-                        className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                        title="Remove from backlog"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+                    )}
+                  </>
+                )}
+              </section>
+            );
+          })()}
         </div>
 
         {/* ── Filters ────────────────────────────────────────── */}
@@ -884,22 +967,6 @@ export default function ProjectDashboard() {
             options={[
               { value: "all", label: "All Types" },
               ...Object.entries(TYPE_META).map(([k, v]) => ({
-                value: k,
-                label: v.label,
-              })),
-            ]}
-          />
-
-          <FilterSelect
-            icon={Clock3}
-            value={status}
-            onChange={(v) => {
-              setStatus(v);
-              setType("all");
-            }}
-            options={[
-              { value: "all", label: "All Statuses" },
-              ...Object.entries(STATUS_META).map(([k, v]) => ({
                 value: k,
                 label: v.label,
               })),
@@ -965,7 +1032,9 @@ export default function ProjectDashboard() {
                   <EntryCard
                     key={entry.id}
                     entry={entry}
+                    activeType={type}
                     delay={Math.min(i, 6) * 50}
+                    onView={() => setViewingEntry(entry)}
                     onEdit={() => setEditingEntry(entry)}
                     onDelete={() => handleDelete(entry)}
                     onImageClick={setZoomSrc}
@@ -1133,6 +1202,16 @@ export default function ProjectDashboard() {
           </div>
         </>
       )}
+
+      <ViewEntryModal
+        entry={viewingEntry}
+        onClose={() => setViewingEntry(null)}
+        onEdit={() => {
+          setEditingEntry(viewingEntry);
+          setViewingEntry(null);
+        }}
+        onImageClick={setZoomSrc}
+      />
 
       <ProfilePanel open={profileOpen} onClose={() => setProfileOpen(false)} />
       <AddEntryModal
@@ -1658,17 +1737,27 @@ function CompareBlock({
 // ════════════════════════════════════════════════════════════════════
 function EntryCard({
   entry,
+  activeType = "all",
   delay = 0,
+  onView,
   onEdit,
   onDelete,
   onImageClick,
 }: {
   entry: Entry;
+  activeType?: string;
   delay?: number;
+  onView: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onImageClick: (src: string) => void;
 }) {
+  const visibleTasks =
+    activeType === "all"
+      ? entry.tasks
+      : entry.tasks.filter((t) => (t.type ?? "task") === activeType);
+  const displayedTasks = visibleTasks.slice(0, 3);
+  const hiddenCount = visibleTasks.length - displayedTasks.length;
   const derived = deriveEntryStatus(entry.tasks);
   const borderAccent = STATUS_BORDER[derived] ?? "border-l-slate-700/60";
 
@@ -1686,14 +1775,23 @@ function EntryCard({
           <div className="flex items-center gap-1.5">
             <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
+                onClick={onView}
+                className="p-1 rounded text-slate-600 hover:text-blue-400 hover:bg-blue-400/10 transition-colors"
+                title="View"
+              >
+                <Eye size={12} />
+              </button>
+              <button
                 onClick={onEdit}
                 className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+                title="Edit"
               >
                 <Pencil size={12} />
               </button>
               <button
                 onClick={onDelete}
                 className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                title="Delete"
               >
                 <Trash2 size={12} />
               </button>
@@ -1710,7 +1808,7 @@ function EntryCard({
 
       {/* Task list */}
       <ul className="px-4 sm:px-5 py-3 flex flex-col gap-3">
-        {entry.tasks.map((task, i) => {
+        {displayedTasks.map((task, i) => {
           const typeKey = (task.type ?? "task") as keyof typeof TYPE_META;
           const meta = TYPE_META[typeKey] ?? TYPE_META.task;
           const Icon = meta.icon;
@@ -1785,6 +1883,12 @@ function EntryCard({
             </li>
           );
         })}
+        {hiddenCount > 0 && (
+          <li className="flex items-center gap-1.5 text-[11px] text-slate-500 pt-1 border-t border-slate-800/50 mt-1">
+            <Eye size={11} />
+            <span>+{hiddenCount} more task{hiddenCount > 1 ? "s" : ""} — click eye icon to view all</span>
+          </li>
+        )}
       </ul>
 
       {/* Tags */}
@@ -1840,5 +1944,196 @@ function EntryCard({
         </div>
       )}
     </article>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// View Entry Modal — focused single-entry overlay
+// ════════════════════════════════════════════════════════════════════
+function ViewEntryModal({
+  entry,
+  onClose,
+  onEdit,
+  onImageClick,
+}: {
+  entry: Entry | null;
+  onClose: () => void;
+  onEdit: () => void;
+  onImageClick: (src: string) => void;
+}) {
+  useEffect(() => {
+    document.body.style.overflow = entry ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [entry]);
+
+  if (!entry) return null;
+  const derived = deriveEntryStatus(entry.tasks);
+  const borderAccent = STATUS_BORDER[derived] ?? "border-l-slate-700/60";
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm"
+      />
+      <div className="fixed z-55 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl max-h-[88vh] flex flex-col bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+            <span className={`w-2 h-2 rounded-full ${STATUS_META[derived]?.dot ?? "bg-slate-600"}`} />
+            <span className="flex items-center gap-1 tracking-widest uppercase">
+              <Folder size={11} /> {entry.project}
+            </span>
+            <span className="text-slate-700">·</span>
+            <span className="font-mono text-slate-500">{formatDate(entry.date)}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onEdit}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-emerald-800/60 text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+            >
+              <Pencil size={12} /> Edit
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1 text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable body */}
+        <div className={`flex-1 overflow-y-auto border-l-4 ${borderAccent}`}>
+          {/* Title */}
+          <div className="px-6 pt-6 pb-4">
+            <h2 className="font-serif text-2xl sm:text-3xl text-slate-50 leading-snug">
+              {entry.title}
+            </h2>
+          </div>
+
+          {/* Tasks */}
+          <ul className="px-6 pb-5 flex flex-col gap-5">
+            {entry.tasks.map((task, i) => {
+              const typeKey = (task.type ?? "task") as keyof typeof TYPE_META;
+              const meta = TYPE_META[typeKey] ?? TYPE_META.task;
+              const Icon = meta.icon;
+              const dot = TASK_STATUS_DOT[task.status] ?? "bg-slate-600";
+              return (
+                <li key={i} className="flex flex-col gap-2">
+                  <div className="flex items-start gap-3">
+                    <span className={`mt-2 w-2 h-2 rounded-full shrink-0 ${dot}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm sm:text-base text-slate-200 leading-snug">
+                        {task.title}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide flex items-center gap-1 ${meta.text} ${meta.bg}`}
+                        >
+                          <Icon size={10} /> {meta.label}
+                        </span>
+                        {task.priority && (
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[task.priority].text} ${PRIORITY_META[task.priority].bg}`}
+                          >
+                            {PRIORITY_META[task.priority].label}
+                          </span>
+                        )}
+                        {task.complexity && (
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[task.complexity].text} ${COMPLEXITY_META[task.complexity].bg}`}
+                          >
+                            {COMPLEXITY_META[task.complexity].label}
+                          </span>
+                        )}
+                        {task.dateRange && (
+                          <span className="text-[11px] text-slate-500 font-mono">
+                            {task.dateRange}
+                          </span>
+                        )}
+                        {task.tags?.map((tag) => {
+                          const s = TASK_TAG_STYLE[tag];
+                          return (
+                            <span
+                              key={tag}
+                              className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+                            >
+                              #{tag}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  {task.compare && task.compare.length > 0 && (
+                    <div className="ml-5 flex flex-col gap-2">
+                      {task.compare.map((pair, j) => (
+                        <CompareBlock
+                          key={j}
+                          pair={pair}
+                          onImageClick={onImageClick}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          {/* Entry tags */}
+          {entry.tags && entry.tags.length > 0 && (
+            <div className="px-6 pb-4 flex flex-wrap gap-1.5">
+              {entry.tags.map((t) => (
+                <span
+                  key={t}
+                  className="text-[11px] text-slate-500 border border-slate-800 rounded-md px-2 py-0.5"
+                >
+                  #{t}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Media */}
+          {entry.media && entry.media.length > 0 && (
+            <div
+              className={`px-6 pb-6 grid gap-3 ${entry.media.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}
+            >
+              {entry.media.map((m, i) => (
+                <figure key={i} className="m-0">
+                  {m.kind === "video" ? (
+                    <video
+                      controls
+                      className="w-full rounded-lg border border-slate-800 bg-slate-950"
+                    >
+                      <source src={m.src} />
+                    </video>
+                  ) : (
+                    <img
+                      src={m.src}
+                      alt={m.caption || entry.title}
+                      onClick={() => onImageClick(m.src)}
+                      className="w-full rounded-lg border border-slate-800 cursor-zoom-in"
+                    />
+                  )}
+                  {m.caption && (
+                    <figcaption className="flex items-center gap-1 text-[11px] text-slate-500 mt-1.5">
+                      {m.kind === "video" ? (
+                        <VideoIcon size={11} />
+                      ) : (
+                        <ImageIcon size={11} />
+                      )}
+                      {m.caption}
+                    </figcaption>
+                  )}
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }

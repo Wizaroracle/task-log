@@ -100,6 +100,8 @@ const TYPE_OPTIONS: { value: NonNullable<Task["type"]>; label: string }[] = [
   { value: "task", label: "Task" },
   { value: "feature", label: "Feature" },
   { value: "bugfix", label: "Bug Fix" },
+  { value: "optimized", label: "Optimized" },
+  { value: "refactor", label: "Refactor" },
   { value: "milestone", label: "Milestone" },
   { value: "learning", label: "Learning" },
 ];

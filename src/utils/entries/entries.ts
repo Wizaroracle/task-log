@@ -16,7 +16,7 @@ export type CompareItem = {
 
 export type Task = {
   title: string;
-  type?: "feature" | "bugfix" | "task" | "milestone" | "learning";
+  type?: "feature" | "bugfix" | "task" | "milestone" | "learning" | "optimized" | "refactor";
   status: "done" | "progress" | "planned";
   priority?: "urgent" | "major" | "minor";
   complexity?: "simple" | "hard" | "complex";
