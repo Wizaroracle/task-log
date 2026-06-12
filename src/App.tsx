@@ -21,6 +21,8 @@ import {
   Zap,
   Eye,
   RefreshCw,
+  Lock,
+  Wand2,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
 import type { CompareItem, Entry, Task } from "./utils/entries/entries";
@@ -184,6 +186,7 @@ function formatDate(iso: string): string {
   });
 }
 
+const WIZARD_PASSWORD = import.meta.env.VITE_PASSWORD;
 // ════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ════════════════════════════════════════════════════════════════════
@@ -217,6 +220,38 @@ export default function ProjectDashboard() {
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [zoomSrc, setZoomSrc] = useState<string | null>(null);
   const [viewingEntry, setViewingEntry] = useState<Entry | null>(null);
+  const [readOnly, setReadOnly] = useState<boolean>(
+    () => sessionStorage.getItem("vc-mode") !== "wizard",
+  );
+  const [wizardModalOpen, setWizardModalOpen] = useState(false);
+  const [wizardInput, setWizardInput] = useState("");
+  const [wizardError, setWizardError] = useState(false);
+
+  const requestWizardMode = () => {
+    if (!readOnly) {
+      // Already in wizard mode — lock immediately
+      setReadOnly(true);
+      sessionStorage.setItem("vc-mode", "readonly");
+    } else {
+      // Prompt for password
+      setWizardInput("");
+      setWizardError(false);
+      setWizardModalOpen(true);
+    }
+  };
+
+  const confirmWizardPassword = () => {
+    if (wizardInput === WIZARD_PASSWORD) {
+      setReadOnly(false);
+      sessionStorage.setItem("vc-mode", "wizard");
+      setWizardModalOpen(false);
+      setWizardInput("");
+      setWizardError(false);
+    } else {
+      setWizardError(true);
+      setWizardInput("");
+    }
+  };
 
   useEffect(() => {
     supabase
@@ -598,11 +633,7 @@ export default function ProjectDashboard() {
   }
 
   const hasFilters =
-    project !== "all" ||
-    type !== "all" ||
-    search.trim() ||
-    dateFrom ||
-    dateTo;
+    project !== "all" || type !== "all" || search.trim() || dateFrom || dateTo;
 
   return (
     <div className="relative min-h-screen w-full bg-slate-950 text-slate-100 overflow-hidden">
@@ -624,15 +655,18 @@ export default function ProjectDashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setFormOpen(true)}
-              className="flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:40ms]"
-            >
-              <Plus size={14} /> New Entry
-            </button>
+            {!readOnly && (
+              <button
+                onClick={() => setFormOpen(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:40ms]"
+              >
+                <Plus size={14} /> New Entry
+              </button>
+            )}
             <ProfileButton
               open={profileOpen}
               onToggle={() => setProfileOpen((o) => !o)}
+              readOnly={readOnly}
             />
           </div>
         </header>
@@ -687,7 +721,9 @@ export default function ProjectDashboard() {
           {/* In Progress */}
           {(() => {
             const IP_PER_PAGE = 5;
-            const ipTotalPages = Math.ceil(inProgressItems.length / IP_PER_PAGE);
+            const ipTotalPages = Math.ceil(
+              inProgressItems.length / IP_PER_PAGE,
+            );
             const pagedIP = inProgressItems.slice(
               (inProgressPage - 1) * IP_PER_PAGE,
               inProgressPage * IP_PER_PAGE,
@@ -704,7 +740,9 @@ export default function ProjectDashboard() {
                   </span>
                 </div>
                 {inProgressItems.length === 0 ? (
-                  <p className="text-xs text-slate-600 py-2">No tasks in progress.</p>
+                  <p className="text-xs text-slate-600 py-2">
+                    No tasks in progress.
+                  </p>
                 ) : (
                   <>
                     <ul className="flex flex-col gap-2">
@@ -749,29 +787,33 @@ export default function ProjectDashboard() {
                               </span>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => markTaskDone(item.task.title)}
-                              disabled={actionLoading === item.task.title}
-                              className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors disabled:opacity-40 whitespace-nowrap"
-                            >
-                              ✓ Done
-                            </button>
-                            <button
-                              onClick={() => markTaskPlanned(item.task.title)}
-                              disabled={actionLoading === item.task.title}
-                              className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors disabled:opacity-40 whitespace-nowrap"
-                            >
-                              → Backlog
-                            </button>
-                          </div>
+                          {!readOnly && (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => markTaskDone(item.task.title)}
+                                disabled={actionLoading === item.task.title}
+                                className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors disabled:opacity-40 whitespace-nowrap"
+                              >
+                                ✓ Done
+                              </button>
+                              <button
+                                onClick={() => markTaskPlanned(item.task.title)}
+                                disabled={actionLoading === item.task.title}
+                                className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors disabled:opacity-40 whitespace-nowrap"
+                              >
+                                → Keep Planning
+                              </button>
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>
                     {ipTotalPages > 1 && (
                       <div className="flex items-center justify-between pt-2 border-t border-yellow-400/10">
                         <button
-                          onClick={() => setInProgressPage((p) => Math.max(1, p - 1))}
+                          onClick={() =>
+                            setInProgressPage((p) => Math.max(1, p - 1))
+                          }
                           disabled={inProgressPage === 1}
                           className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
                         >
@@ -781,7 +823,11 @@ export default function ProjectDashboard() {
                           {inProgressPage} / {ipTotalPages}
                         </span>
                         <button
-                          onClick={() => setInProgressPage((p) => Math.min(ipTotalPages, p + 1))}
+                          onClick={() =>
+                            setInProgressPage((p) =>
+                              Math.min(ipTotalPages, p + 1),
+                            )
+                          }
                           disabled={inProgressPage === ipTotalPages}
                           className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
                         >
@@ -798,7 +844,9 @@ export default function ProjectDashboard() {
           {/* Planned / Backlog */}
           {(() => {
             const BL_PER_PAGE = 7;
-            const blTotalPages = Math.ceil(filteredPlannedItems.length / BL_PER_PAGE);
+            const blTotalPages = Math.ceil(
+              filteredPlannedItems.length / BL_PER_PAGE,
+            );
             const pagedBL = filteredPlannedItems.slice(
               (backlogPage - 1) * BL_PER_PAGE,
               backlogPage * BL_PER_PAGE,
@@ -809,21 +857,28 @@ export default function ProjectDashboard() {
                   <div className="flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
                     <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-blue-400">
-                      Backlog
+                      Planning Phase
                     </span>
                     <span className="text-[11px] text-slate-600">
                       {filteredPlannedItems.length}
                     </span>
                   </div>
-                  <button
-                    onClick={() => {
-                      setQuickAdd({ title: "", priority: "", complexity: "", tags: [] });
-                      setQuickAddOpen(true);
-                    }}
-                    className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
-                  >
-                    + Add planned task
-                  </button>
+                  {!readOnly && (
+                    <button
+                      onClick={() => {
+                        setQuickAdd({
+                          title: "",
+                          priority: "",
+                          complexity: "",
+                          tags: [],
+                        });
+                        setQuickAddOpen(true);
+                      }}
+                      className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
+                    >
+                      + Add planned task
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {["all", ...TASK_TAGS].map((tag) => (
@@ -841,28 +896,57 @@ export default function ProjectDashboard() {
                   ))}
                 </div>
                 {filteredPlannedItems.length === 0 ? (
-                  <p className="text-xs text-slate-600 py-2">No planned tasks yet.</p>
+                  <p className="text-xs text-slate-600 py-2">
+                    No planned tasks yet.
+                  </p>
                 ) : (
                   <>
                     <ul className="flex flex-col gap-1">
                       {pagedBL.map((item, pageLocalIdx) => {
-                        const realIdx = (backlogPage - 1) * BL_PER_PAGE + pageLocalIdx;
+                        const realIdx =
+                          (backlogPage - 1) * BL_PER_PAGE + pageLocalIdx;
                         return (
                           <li
                             key={item.task.title}
-                            draggable
-                            onDragStart={() => setDragIdx(realIdx)}
-                            onDragOver={(e) => { e.preventDefault(); setDragOverIdx(realIdx); }}
-                            onDragLeave={() => setDragOverIdx(null)}
-                            onDrop={() => handleBacklogDrop(realIdx)}
-                            onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
+                            draggable={!readOnly}
+                            onDragStart={
+                              !readOnly ? () => setDragIdx(realIdx) : undefined
+                            }
+                            onDragOver={
+                              !readOnly
+                                ? (e) => {
+                                    e.preventDefault();
+                                    setDragOverIdx(realIdx);
+                                  }
+                                : undefined
+                            }
+                            onDragLeave={
+                              !readOnly ? () => setDragOverIdx(null) : undefined
+                            }
+                            onDrop={
+                              !readOnly
+                                ? () => handleBacklogDrop(realIdx)
+                                : undefined
+                            }
+                            onDragEnd={
+                              !readOnly
+                                ? () => {
+                                    setDragIdx(null);
+                                    setDragOverIdx(null);
+                                  }
+                                : undefined
+                            }
                             className={`flex items-center gap-2.5 py-2 px-1 rounded-lg border transition-colors ${
-                              dragOverIdx === realIdx && dragIdx !== realIdx
+                              !readOnly &&
+                              dragOverIdx === realIdx &&
+                              dragIdx !== realIdx
                                 ? "border-blue-400/50 bg-blue-400/8"
                                 : "border-transparent"
                             } border-b border-b-blue-400/10 last:border-b-0`}
                           >
-                            <span className="text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing shrink-0 select-none text-sm leading-none">
+                            <span
+                              className={`shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}
+                            >
                               ⠿
                             </span>
                             <div className="flex-1 min-w-0">
@@ -881,7 +965,10 @@ export default function ProjectDashboard() {
                                   <span
                                     className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
                                   >
-                                    {COMPLEXITY_META[item.task.complexity].label}
+                                    {
+                                      COMPLEXITY_META[item.task.complexity]
+                                        .label
+                                    }
                                   </span>
                                 )}
                                 {(item.task.tags ?? []).map((tag) => {
@@ -897,22 +984,24 @@ export default function ProjectDashboard() {
                                 })}
                               </div>
                             </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                onClick={() => startPlannedTask(item)}
-                                disabled={actionLoading === item.task.title}
-                                className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
-                              >
-                                ▶ Start
-                              </button>
-                              <button
-                                onClick={() => deleteBacklogTask(item)}
-                                className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                                title="Remove from backlog"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
+                            {!readOnly && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={() => startPlannedTask(item)}
+                                  disabled={actionLoading === item.task.title}
+                                  className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
+                                >
+                                  ▶ Start
+                                </button>
+                                <button
+                                  onClick={() => deleteBacklogTask(item)}
+                                  className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                                  title="Remove from backlog"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            )}
                           </li>
                         );
                       })}
@@ -920,7 +1009,9 @@ export default function ProjectDashboard() {
                     {blTotalPages > 1 && (
                       <div className="flex items-center justify-between pt-2 border-t border-blue-400/10">
                         <button
-                          onClick={() => setBacklogPage((p) => Math.max(1, p - 1))}
+                          onClick={() =>
+                            setBacklogPage((p) => Math.max(1, p - 1))
+                          }
                           disabled={backlogPage === 1}
                           className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
                         >
@@ -930,7 +1021,9 @@ export default function ProjectDashboard() {
                           {backlogPage} / {blTotalPages}
                         </span>
                         <button
-                          onClick={() => setBacklogPage((p) => Math.min(blTotalPages, p + 1))}
+                          onClick={() =>
+                            setBacklogPage((p) => Math.min(blTotalPages, p + 1))
+                          }
                           disabled={backlogPage === blTotalPages}
                           className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors"
                         >
@@ -1044,6 +1137,7 @@ export default function ProjectDashboard() {
                     entry={entry}
                     activeType={type}
                     delay={Math.min(i, 6) * 50}
+                    readOnly={readOnly}
                     onView={() => setViewingEntry(entry)}
                     onEdit={() => setEditingEntry(entry)}
                     onDelete={() => handleDelete(entry)}
@@ -1125,7 +1219,7 @@ export default function ProjectDashboard() {
           <div className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold tracking-[0.25em] uppercase text-blue-400">
-                Add to Backlog
+                Add to Plans
               </span>
               <button
                 onClick={() => setQuickAddOpen(false)}
@@ -1221,9 +1315,16 @@ export default function ProjectDashboard() {
           setViewingEntry(null);
         }}
         onImageClick={setZoomSrc}
+        readOnly={readOnly}
       />
 
-      <ProfilePanel open={profileOpen} onClose={() => setProfileOpen(false)} entries={entries} />
+      <ProfilePanel
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        entries={entries}
+        readOnly={readOnly}
+        onToggleMode={requestWizardMode}
+      />
       <AddEntryModal
         open={formOpen || editingEntry !== null}
         initialEntry={editingEntry ?? undefined}
@@ -1246,6 +1347,78 @@ export default function ProjectDashboard() {
           })
         }
       />
+
+      {/* Wizard Mode Password Modal */}
+      {wizardModalOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-60 bg-slate-950/80 backdrop-blur-sm"
+            onClick={() => {
+              setWizardModalOpen(false);
+              setWizardError(false);
+              setWizardInput("");
+            }}
+          />
+          <div className="fixed z-70 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-2xl border border-emerald-900/60 bg-slate-900 shadow-2xl p-6 flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <span className="flex items-center justify-center w-10 h-10 rounded-full bg-emerald-400/10 ring-1 ring-emerald-400/20">
+                <Wand2 size={18} className="text-emerald-400" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-slate-100">
+                  Enter Wizard Password
+                </p>
+                <p className="text-xs text-slate-500">
+                  Required to unlock full access
+                </p>
+              </div>
+            </div>
+            <input
+              type="password"
+              autoFocus
+              value={wizardInput}
+              onChange={(e) => {
+                setWizardInput(e.target.value);
+                setWizardError(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmWizardPassword();
+                if (e.key === "Escape") {
+                  setWizardModalOpen(false);
+                  setWizardInput("");
+                  setWizardError(false);
+                }
+              }}
+              placeholder="Password"
+              className={`w-full rounded-xl border bg-slate-950/60 px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 outline-none transition-colors ${wizardError ? "border-red-500/60 focus:border-red-400" : "border-slate-700 focus:border-emerald-500/60"}`}
+            />
+            {wizardError && (
+              <p className="text-xs text-red-400 -mt-2">
+                Incorrect password. Try again.
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setWizardModalOpen(false);
+                  setWizardInput("");
+                  setWizardError(false);
+                }}
+                className="flex-1 rounded-xl border border-slate-700 text-slate-400 text-sm py-2.5 hover:bg-slate-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmWizardPassword}
+                disabled={!wizardInput.trim()}
+                className="flex-1 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-sm font-semibold py-2.5 hover:bg-emerald-400/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Unlock
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       <style>{`
         @keyframes fadeIn  { from { opacity: 0 } to { opacity: 1 } }
@@ -1510,9 +1683,11 @@ function BackgroundDecor() {
 function ProfileButton({
   open,
   onToggle,
+  readOnly,
 }: {
   open: boolean;
   onToggle: () => void;
+  readOnly: boolean;
 }) {
   return (
     <button
@@ -1523,15 +1698,22 @@ function ProfileButton({
           : "border-slate-800 bg-slate-900/60 hover:border-emerald-700/50"
       }`}
     >
-      <span className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-400/15 text-emerald-300 font-serif text-sm sm:text-base ring-1 ring-emerald-400/30">
+      <span className="relative flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-emerald-400/15 text-emerald-300 font-serif text-sm sm:text-base ring-1 ring-emerald-400/30">
         {PROFILE.avatarInitials}
+        {readOnly && (
+          <span className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center w-4 h-4 rounded-full bg-slate-900 ring-1 ring-slate-700">
+            <Lock size={8} className="text-amber-400" />
+          </span>
+        )}
       </span>
       <span className="hidden sm:flex flex-col items-start text-left">
         <span className="text-sm font-semibold text-slate-100 leading-tight">
           {PROFILE.name}
         </span>
-        <span className="text-[11px] text-slate-400 leading-tight">
-          {PROFILE.role}
+        <span
+          className={`text-[11px] leading-tight ${readOnly ? "text-amber-400/80" : "text-emerald-400/80"}`}
+        >
+          {readOnly ? "Read Only" : "Wizard Mode"}
         </span>
       </span>
     </button>
@@ -1542,10 +1724,14 @@ function ProfilePanel({
   open,
   onClose,
   entries,
+  readOnly,
+  onToggleMode,
 }: {
   open: boolean;
   onClose: () => void;
   entries: Entry[];
+  readOnly: boolean;
+  onToggleMode: () => void;
 }) {
   const projects = useMemo(
     () => Array.from(new Set(entries.map((e) => e.project))),
@@ -1585,7 +1771,9 @@ function ProfilePanel({
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [open]);
 
   return (
@@ -1608,12 +1796,42 @@ function ProfilePanel({
           <span className="text-xs font-bold tracking-[0.25em] uppercase text-emerald-400">
             Developer Profile
           </span>
-          <button
-            onClick={onClose}
-            className="text-slate-500 hover:text-slate-300 transition-colors"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Read-only / Wizard Mode toggle */}
+            <button
+              onClick={onToggleMode}
+              className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
+                readOnly
+                  ? "border-amber-500/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20"
+                  : "border-emerald-500/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
+              }`}
+              title={readOnly ? "Switch to Wizard Mode" : "Switch to Read Only"}
+            >
+              {readOnly ? (
+                <>
+                  <Lock size={11} />
+                  <span>Read Only</span>
+                  <span className="text-slate-500 font-normal">
+                    · tap to unlock
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Wand2 size={11} />
+                  <span>Wizard Mode</span>
+                  <span className="text-slate-500 font-normal">
+                    · tap to lock
+                  </span>
+                </>
+              )}
+            </button>
+            <button
+              onClick={onClose}
+              className="text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable body */}
@@ -1673,7 +1891,9 @@ function ProfilePanel({
                         </span>
                       </div>
                       <div className="flex items-baseline gap-1 mt-0.5">
-                        <span className={`text-xl font-bold font-serif leading-none ${meta.text}`}>
+                        <span
+                          className={`text-xl font-bold font-serif leading-none ${meta.text}`}
+                        >
                           {count}
                         </span>
                         <span className="text-xs text-slate-500">{pct}%</span>
@@ -1696,7 +1916,10 @@ function ProfilePanel({
                   return (
                     <div
                       key={key}
-                      style={{ width: `${pct}%`, backgroundColor: TYPE_COLORS[key] }}
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: TYPE_COLORS[key],
+                      }}
                       className="h-full"
                       title={`${meta.label}: ${count} (${Math.round(pct)}%)`}
                     />
@@ -1707,31 +1930,57 @@ function ProfilePanel({
               {/* Description */}
               {(() => {
                 const map: Record<string, [number, string]> = {
-                  feature:   [overallStats.typeCounts["feature"]   ?? 0, "feature"],
-                  bugfix:    [overallStats.typeCounts["bugfix"]    ?? 0, "bug fix"],
-                  optimized: [overallStats.typeCounts["optimized"] ?? 0, "optimization"],
-                  refactor:  [overallStats.typeCounts["refactor"]  ?? 0, "refactor"],
-                  task:      [overallStats.typeCounts["task"]      ?? 0, "task"],
-                  milestone: [overallStats.typeCounts["milestone"] ?? 0, "milestone"],
-                  learning:  [overallStats.typeCounts["learning"]  ?? 0, "learning"],
+                  feature: [overallStats.typeCounts["feature"] ?? 0, "feature"],
+                  bugfix: [overallStats.typeCounts["bugfix"] ?? 0, "bug fix"],
+                  optimized: [
+                    overallStats.typeCounts["optimized"] ?? 0,
+                    "optimization",
+                  ],
+                  refactor: [
+                    overallStats.typeCounts["refactor"] ?? 0,
+                    "refactor",
+                  ],
+                  task: [overallStats.typeCounts["task"] ?? 0, "task"],
+                  milestone: [
+                    overallStats.typeCounts["milestone"] ?? 0,
+                    "milestone",
+                  ],
+                  learning: [
+                    overallStats.typeCounts["learning"] ?? 0,
+                    "learning",
+                  ],
                 };
                 const verbs: Record<string, string> = {
-                  feature: "shipped", bugfix: "resolved", optimized: "optimized",
-                  refactor: "refactored", task: "completed", milestone: "hit", learning: "logged",
+                  feature: "shipped",
+                  bugfix: "resolved",
+                  optimized: "optimized",
+                  refactor: "refactored",
+                  task: "completed",
+                  milestone: "hit",
+                  learning: "logged",
                 };
                 const parts = Object.entries(map)
                   .filter(([, [n]]) => n > 0)
-                  .map(([k, [n, label]]) => `${verbs[k]} ${n} ${label}${n !== 1 ? "s" : ""}`);
+                  .map(
+                    ([k, [n, label]]) =>
+                      `${verbs[k]} ${n} ${label}${n !== 1 ? "s" : ""}`,
+                  );
 
                 const sentence =
                   parts.length > 1
-                    ? parts.slice(0, -1).join(", ") + ", and " + parts[parts.length - 1]
-                    : parts[0] ?? "";
+                    ? parts.slice(0, -1).join(", ") +
+                      ", and " +
+                      parts[parts.length - 1]
+                    : (parts[0] ?? "");
 
-                const sorted = Object.entries(overallStats.typeCounts).sort(([, a], [, b]) => b - a);
+                const sorted = Object.entries(overallStats.typeCounts).sort(
+                  ([, a], [, b]) => b - a,
+                );
                 const topKey = sorted[0]?.[0] ?? "";
                 const topMeta = TYPE_META[topKey as keyof typeof TYPE_META];
-                const topPct = Math.round(((sorted[0]?.[1] ?? 0) / overallStats.total) * 100);
+                const topPct = Math.round(
+                  ((sorted[0]?.[1] ?? 0) / overallStats.total) * 100,
+                );
 
                 return (
                   <p className="text-xs text-slate-400 leading-relaxed pt-1">
@@ -1740,7 +1989,9 @@ function ProfilePanel({
                       <span className={topMeta.text}>{topMeta.label}</span>
                     )}{" "}
                     leading at{" "}
-                    <span className="text-emerald-300 font-semibold">{topPct}%</span>{" "}
+                    <span className="text-emerald-300 font-semibold">
+                      {topPct}%
+                    </span>{" "}
                     of all work logged across all projects.
                   </p>
                 );
@@ -1787,18 +2038,14 @@ function ProfilePanel({
                     const count = pm.typeCounts[key] ?? 0;
                     if (count === 0) return null;
                     const pct =
-                      pm.total > 0
-                        ? Math.round((count / pm.total) * 100)
-                        : 0;
+                      pm.total > 0 ? Math.round((count / pm.total) * 100) : 0;
                     const Icon = meta.icon;
                     return (
                       <div
                         key={key}
                         className={`rounded-lg ${meta.bg} ring-1 ${meta.ring} px-2.5 py-2 flex flex-col gap-0.5`}
                       >
-                        <div
-                          className={`flex items-center gap-1 ${meta.text}`}
-                        >
+                        <div className={`flex items-center gap-1 ${meta.text}`}>
                           <Icon size={11} />
                           <span className="text-[10px] font-bold uppercase tracking-wide leading-none">
                             {meta.label}
@@ -1810,9 +2057,7 @@ function ProfilePanel({
                           >
                             {count}
                           </span>
-                          <span className="text-xs text-slate-500">
-                            {pct}%
-                          </span>
+                          <span className="text-xs text-slate-500">{pct}%</span>
                         </div>
                       </div>
                     );
@@ -2002,6 +2247,7 @@ function EntryCard({
   entry,
   activeType = "all",
   delay = 0,
+  readOnly = false,
   onView,
   onEdit,
   onDelete,
@@ -2010,6 +2256,7 @@ function EntryCard({
   entry: Entry;
   activeType?: string;
   delay?: number;
+  readOnly?: boolean;
   onView: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -2044,20 +2291,24 @@ function EntryCard({
               >
                 <Eye size={12} />
               </button>
-              <button
-                onClick={onEdit}
-                className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
-                title="Edit"
-              >
-                <Pencil size={12} />
-              </button>
-              <button
-                onClick={onDelete}
-                className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                title="Delete"
-              >
-                <Trash2 size={12} />
-              </button>
+              {!readOnly && (
+                <>
+                  <button
+                    onClick={onEdit}
+                    className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+                    title="Edit"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    onClick={onDelete}
+                    className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </>
+              )}
             </div>
             <span className="text-[10px] sm:text-[11px] font-mono text-slate-500">
               {formatDate(entry.date)}
@@ -2149,7 +2400,10 @@ function EntryCard({
         {hiddenCount > 0 && (
           <li className="flex items-center gap-1.5 text-[11px] text-slate-500 pt-1 border-t border-slate-800/50 mt-1">
             <Eye size={11} />
-            <span>+{hiddenCount} more task{hiddenCount > 1 ? "s" : ""} — click eye icon to view all</span>
+            <span>
+              +{hiddenCount} more task{hiddenCount > 1 ? "s" : ""} — click eye
+              icon to view all
+            </span>
           </li>
         )}
       </ul>
@@ -2218,15 +2472,19 @@ function ViewEntryModal({
   onClose,
   onEdit,
   onImageClick,
+  readOnly = false,
 }: {
   entry: Entry | null;
   onClose: () => void;
   onEdit: () => void;
   onImageClick: (src: string) => void;
+  readOnly?: boolean;
 }) {
   useEffect(() => {
     document.body.style.overflow = entry ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [entry]);
 
   if (!entry) return null;
@@ -2243,20 +2501,26 @@ function ViewEntryModal({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-2 text-[10px] text-slate-400">
-            <span className={`w-2 h-2 rounded-full ${STATUS_META[derived]?.dot ?? "bg-slate-600"}`} />
+            <span
+              className={`w-2 h-2 rounded-full ${STATUS_META[derived]?.dot ?? "bg-slate-600"}`}
+            />
             <span className="flex items-center gap-1 tracking-widest uppercase">
               <Folder size={11} /> {entry.project}
             </span>
             <span className="text-slate-700">·</span>
-            <span className="font-mono text-slate-500">{formatDate(entry.date)}</span>
+            <span className="font-mono text-slate-500">
+              {formatDate(entry.date)}
+            </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={onEdit}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-emerald-800/60 text-emerald-400 hover:bg-emerald-400/10 transition-colors"
-            >
-              <Pencil size={12} /> Edit
-            </button>
+            {!readOnly && (
+              <button
+                onClick={onEdit}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-emerald-800/60 text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+              >
+                <Pencil size={12} /> Edit
+              </button>
+            )}
             <button
               onClick={onClose}
               className="p-1 text-slate-500 hover:text-slate-300 transition-colors"
@@ -2285,7 +2549,9 @@ function ViewEntryModal({
               return (
                 <li key={i} className="flex flex-col gap-2">
                   <div className="flex items-start gap-3">
-                    <span className={`mt-2 w-2 h-2 rounded-full shrink-0 ${dot}`} />
+                    <span
+                      className={`mt-2 w-2 h-2 rounded-full shrink-0 ${dot}`}
+                    />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm sm:text-base text-slate-200 leading-snug">
                         {task.title}
