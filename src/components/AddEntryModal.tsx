@@ -7,7 +7,12 @@ import {
   Video as VideoIcon,
   X,
 } from "lucide-react";
-import type { CompareItem, Entry, EntryMedia, Task } from "../utils/entries/entries";
+import type {
+  CompareItem,
+  Entry,
+  EntryMedia,
+  Task,
+} from "../utils/entries/entries";
 
 export type InProgressItem = {
   entryId: string;
@@ -25,6 +30,15 @@ type CompareDraft = {
   after: { file: File | null; preview: string; note: string };
 };
 
+const TASK_TAGS = [
+  "booking",
+  "food",
+  "collection",
+  "prestige",
+  "perks",
+  "love",
+] as const;
+
 type TaskDraft = {
   title: string;
   type: NonNullable<Task["type"]>;
@@ -32,6 +46,7 @@ type TaskDraft = {
   priority: Task["priority"];
   complexity: Task["complexity"];
   dateRange: string;
+  tags: string[];
   compare: CompareDraft[];
 };
 
@@ -66,6 +81,7 @@ const BLANK_TASK = (): TaskDraft => ({
   priority: undefined,
   complexity: undefined,
   dateRange: "",
+  tags: [],
   compare: [],
 });
 
@@ -110,6 +126,7 @@ function entryToDraft(entry: Entry): EntryDraft {
       priority: t.priority,
       complexity: t.complexity,
       dateRange: t.dateRange ?? "",
+      tags: t.tags ?? [],
       compare: (t.compare ?? []).map((c) => ({
         label: c.label ?? "",
         before: { file: null, preview: c.before.src, note: c.before.note },
@@ -127,7 +144,11 @@ function entryToDraft(entry: Entry): EntryDraft {
 
 // ── Image compression ─────────────────────────────────────────────────
 
-function compressImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> {
+function compressImage(
+  file: File,
+  maxPx = 1920,
+  quality = 0.82,
+): Promise<File> {
   if (!file.type.startsWith("image/")) return Promise.resolve(file);
   return new Promise((resolve) => {
     const img = new Image();
@@ -143,14 +164,24 @@ function compressImage(file: File, maxPx = 1920, quality = 0.82): Promise<File> 
       canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
         (blob) => {
-          if (!blob) { resolve(file); return; }
-          resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+          if (!blob) {
+            resolve(file);
+            return;
+          }
+          resolve(
+            new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), {
+              type: "image/jpeg",
+            }),
+          );
         },
         "image/jpeg",
         quality,
       );
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
     img.src = url;
   });
 }
@@ -200,6 +231,7 @@ export function AddEntryModal({
           priority: item.task.priority,
           complexity: item.task.complexity,
           dateRange: "",
+          tags: item.task.tags ?? [],
           compare: [],
         }));
         const seed: TaskDraft[] = seedTask
@@ -211,17 +243,21 @@ export function AddEntryModal({
                 priority: seedTask.priority,
                 complexity: seedTask.complexity,
                 dateRange: "",
+                tags: seedTask.tags ?? [],
                 compare: [],
               },
             ]
           : [];
-        const deduped = [...seed, ...carried.filter((t) => !seed.some((s) => s.title === t.title))];
+        const deduped = [
+          ...seed,
+          ...carried.filter((t) => !seed.some((s) => s.title === t.title)),
+        ];
         setDraft({ ...BLANK_DRAFT(), tasks: [...deduped, BLANK_TASK()] });
       }
       setErr(null);
       setSaving(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   function setField<K extends keyof EntryDraft>(k: K, v: EntryDraft[K]) {
@@ -268,7 +304,7 @@ export function AddEntryModal({
     ti: number,
     ci: number,
     side: "before" | "after",
-    patch: Partial<CompareDraft["before"]>
+    patch: Partial<CompareDraft["before"]>,
   ) {
     const cmp = draft.tasks[ti].compare[ci];
     updateCompare(ti, ci, { [side]: { ...cmp[side], ...patch } });
@@ -324,7 +360,7 @@ export function AddEntryModal({
                   : c.after.preview,
                 note: c.after.note,
               },
-            }))
+            })),
           );
           return {
             title: t.title.trim(),
@@ -333,9 +369,10 @@ export function AddEntryModal({
             ...(t.priority ? { priority: t.priority } : {}),
             ...(t.complexity ? { complexity: t.complexity } : {}),
             ...(t.dateRange.trim() ? { dateRange: t.dateRange.trim() } : {}),
+            ...(t.tags.length > 0 ? { tags: t.tags } : {}),
             ...(compare.length > 0 ? { compare } : {}),
           };
-        })
+        }),
       );
 
       const resolvedMedia: EntryMedia[] = await Promise.all(
@@ -345,7 +382,7 @@ export function AddEntryModal({
             kind: m.kind,
             src: m.file ? await uploadFile(m.file) : m.preview,
             ...(m.caption.trim() ? { caption: m.caption.trim() } : {}),
-          }))
+          })),
       );
 
       const entry: Entry = {
@@ -582,8 +619,12 @@ export function AddEntryModal({
             className="w-full rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-sm font-semibold py-2.5 hover:bg-emerald-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving
-              ? isEdit ? "Updating…" : "Uploading & saving…"
-              : isEdit ? "Update Entry" : "Save Entry"}
+              ? isEdit
+                ? "Updating…"
+                : "Uploading & saving…"
+              : isEdit
+                ? "Update Entry"
+                : "Save Entry"}
           </button>
         </div>
       </div>
@@ -645,7 +686,9 @@ function TaskBlock({
       <div className="grid grid-cols-2 gap-2">
         <select
           value={task.type}
-          onChange={(e) => onUpdate({ type: e.target.value as TaskDraft["type"] })}
+          onChange={(e) =>
+            onUpdate({ type: e.target.value as TaskDraft["type"] })
+          }
           className={SEL_CLS + " w-full"}
         >
           {TYPE_OPTIONS.map((o) => (
@@ -668,7 +711,9 @@ function TaskBlock({
         <select
           value={task.priority ?? ""}
           onChange={(e) =>
-            onUpdate({ priority: (e.target.value as Task["priority"]) || undefined })
+            onUpdate({
+              priority: (e.target.value as Task["priority"]) || undefined,
+            })
           }
           className={SEL_CLS + " w-full"}
         >
@@ -680,7 +725,9 @@ function TaskBlock({
         <select
           value={task.complexity ?? ""}
           onChange={(e) =>
-            onUpdate({ complexity: (e.target.value as Task["complexity"]) || undefined })
+            onUpdate({
+              complexity: (e.target.value as Task["complexity"]) || undefined,
+            })
           }
           className={SEL_CLS + " w-full"}
         >
@@ -693,9 +740,38 @@ function TaskBlock({
       <input
         value={task.dateRange}
         onChange={(e) => onUpdate({ dateRange: e.target.value })}
-        placeholder="Date range (optional, e.g. May 4 – May 6)"
+        placeholder="Description (optional)"
         className={SEL_CLS + " w-full placeholder:text-slate-600"}
       />
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+          Tags
+        </span>
+        {TASK_TAGS.map((tag) => {
+          const active = task.tags.includes(tag);
+          return (
+            <button
+              key={tag}
+              type="button"
+              onClick={() =>
+                onUpdate({
+                  tags: active
+                    ? task.tags.filter((t) => t !== tag)
+                    : [...task.tags, tag],
+                })
+              }
+              className={`text-[10px] px-2.5 py-0.5 rounded-full border transition-colors ${
+                active
+                  ? "border-emerald-500/50 bg-emerald-400/10 text-emerald-300"
+                  : "border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-400"
+              }`}
+            >
+              #{tag}
+            </button>
+          );
+        })}
+      </div>
 
       {task.compare.map((cmp, ci) => (
         <CompareEditor
@@ -782,7 +858,9 @@ function CompareSide({
   const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div className="flex flex-col gap-1.5">
-      <span className={`text-[9px] font-bold tracking-widest uppercase ${color}`}>
+      <span
+        className={`text-[9px] font-bold tracking-widest uppercase ${color}`}
+      >
         {label}
       </span>
       {data.preview ? (

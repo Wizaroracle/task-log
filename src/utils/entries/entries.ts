@@ -21,6 +21,7 @@ export type Task = {
   priority?: "urgent" | "major" | "minor";
   complexity?: "simple" | "hard" | "complex";
   dateRange?: string;
+  tags?: string[];
   sortOrder?: number;
   compare?: CompareItem[];
 };

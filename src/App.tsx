@@ -97,6 +97,31 @@ const COMPLEXITY_META = {
   },
 };
 
+const TASK_TAGS = [
+  "booking",
+  "food",
+  "collection",
+  "prestige",
+  "perks",
+  "love",
+];
+
+const TASK_TAG_STYLE: Record<
+  string,
+  { text: string; bg: string; border: string }
+> = {
+  booking: {
+    text: "text-sky-400",
+    bg: "bg-sky-400/10",
+    border: "border-sky-400/30",
+  },
+  food: {
+    text: "text-orange-400",
+    bg: "bg-orange-400/10",
+    border: "border-orange-400/30",
+  },
+};
+
 const TASK_STATUS_DOT: Record<string, string> = {
   done: "bg-emerald-400",
   progress: "bg-yellow-400",
@@ -154,7 +179,10 @@ export default function ProjectDashboard() {
     title: "",
     priority: "",
     complexity: "",
+    tags: [] as string[],
   });
+  const [backlogTagFilter, setBacklogTagFilter] = useState("all");
+  const [page, setPage] = useState(1);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [zoomSrc, setZoomSrc] = useState<string | null>(null);
@@ -177,6 +205,10 @@ export default function ProjectDashboard() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [project, type, status, search, dateFrom, dateTo]);
 
   const projects = useMemo(
     () => Array.from(new Set(entries.map((e) => e.project))),
@@ -259,6 +291,16 @@ export default function ProjectDashboard() {
     }
     return Array.from(seen.values());
   }, [entries]);
+
+  const filteredPlannedItems = useMemo(
+    () =>
+      backlogTagFilter === "all"
+        ? plannedItems
+        : plannedItems.filter((item) =>
+            (item.task.tags ?? []).includes(backlogTagFilter),
+          ),
+    [plannedItems, backlogTagFilter],
+  );
 
   const stats = useMemo(() => {
     const base =
@@ -502,13 +544,14 @@ export default function ProjectDashboard() {
           ...(quickAdd.complexity
             ? { complexity: quickAdd.complexity as Task["complexity"] }
             : {}),
+          ...(quickAdd.tags.length > 0 ? { tags: quickAdd.tags } : {}),
         },
       ],
     };
     const { error } = await supabase.from("entries").insert(newEntry);
     if (!error) {
       setEntries((prev) => [newEntry, ...prev]);
-      setQuickAdd({ title: "", priority: "", complexity: "" });
+      setQuickAdd({ title: "", priority: "", complexity: "", tags: [] });
       setQuickAddOpen(false);
     }
     setQuickAddSaving(false);
@@ -644,6 +687,17 @@ export default function ProjectDashboard() {
                             {COMPLEXITY_META[item.task.complexity].label}
                           </span>
                         )}
+                        {(item.task.tags ?? []).map((tag) => {
+                          const s = TASK_TAG_STYLE[tag];
+                          return (
+                            <span
+                              key={tag}
+                              className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+                            >
+                              #{tag}
+                            </span>
+                          );
+                        })}
                         <span className="text-[10px] text-slate-600">
                           started {formatDate(item.entryDate)}
                         </span>
@@ -680,12 +734,17 @@ export default function ProjectDashboard() {
                   Backlog
                 </span>
                 <span className="text-[11px] text-slate-600">
-                  {plannedItems.length}
+                  {filteredPlannedItems.length}
                 </span>
               </div>
               <button
                 onClick={() => {
-                  setQuickAdd({ title: "", priority: "", complexity: "" });
+                  setQuickAdd({
+                    title: "",
+                    priority: "",
+                    complexity: "",
+                    tags: [],
+                  });
                   setQuickAddOpen(true);
                 }}
                 className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
@@ -693,13 +752,28 @@ export default function ProjectDashboard() {
                 + Add planned task
               </button>
             </div>
-            {plannedItems.length === 0 ? (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {["all", ...TASK_TAGS].map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => setBacklogTagFilter(tag)}
+                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                    backlogTagFilter === tag
+                      ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
+                      : "border-slate-800 text-slate-500 hover:text-slate-400"
+                  }`}
+                >
+                  {tag === "all" ? "All" : `#${tag}`}
+                </button>
+              ))}
+            </div>
+            {filteredPlannedItems.length === 0 ? (
               <p className="text-xs text-slate-600 py-2">
                 No planned tasks yet.
               </p>
             ) : (
               <ul className="flex flex-col gap-1">
-                {plannedItems.map((item, i) => (
+                {filteredPlannedItems.map((item, i) => (
                   <li
                     key={item.task.title}
                     draggable
@@ -742,6 +816,17 @@ export default function ProjectDashboard() {
                             {COMPLEXITY_META[item.task.complexity].label}
                           </span>
                         )}
+                        {(item.task.tags ?? []).map((tag) => {
+                          const s = TASK_TAG_STYLE[tag];
+                          return (
+                            <span
+                              key={tag}
+                              className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+                            >
+                              #{tag}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
@@ -856,30 +941,75 @@ export default function ProjectDashboard() {
         </section>
 
         {/* ── Entries grid ───────────────────────────────────── */}
-        {loading ? (
-          <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
-            Loading entries…
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
-            No entries yet — hit{" "}
-            <span className="text-emerald-400 font-medium">+ New Entry</span> to
-            log your first task.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-            {filtered.map((entry, i) => (
-              <EntryCard
-                key={entry.id}
-                entry={entry}
-                delay={Math.min(i, 6) * 50}
-                onEdit={() => setEditingEntry(entry)}
-                onDelete={() => handleDelete(entry)}
-                onImageClick={setZoomSrc}
-              />
-            ))}
-          </div>
-        )}
+        {(() => {
+          const ITEMS_PER_PAGE = 9;
+          const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+          const paged = filtered.slice(
+            (page - 1) * ITEMS_PER_PAGE,
+            page * ITEMS_PER_PAGE,
+          );
+          return loading ? (
+            <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
+              Loading entries…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
+              No entries yet — hit{" "}
+              <span className="text-emerald-400 font-medium">+ New Entry</span>{" "}
+              to log your first task.
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+                {paged.map((entry, i) => (
+                  <EntryCard
+                    key={entry.id}
+                    entry={entry}
+                    delay={Math.min(i, 6) * 50}
+                    onEdit={() => setEditingEntry(entry)}
+                    onDelete={() => handleDelete(entry)}
+                    onImageClick={setZoomSrc}
+                  />
+                ))}
+              </div>
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-3 mt-8">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400 text-xs hover:border-slate-600 hover:text-slate-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    ← Prev
+                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+                      (p) => (
+                        <button
+                          key={p}
+                          onClick={() => setPage(p)}
+                          className={`w-7 h-7 rounded-md text-xs transition-colors ${
+                            p === page
+                              ? "bg-emerald-400/15 text-emerald-300 border border-emerald-700/40"
+                              : "text-slate-500 hover:text-slate-300 border border-transparent hover:border-slate-700"
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400 text-xs hover:border-slate-600 hover:text-slate-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         <p className="mt-12 text-center text-[11px] text-slate-500">
           I can do all things though
@@ -960,6 +1090,38 @@ export default function ProjectDashboard() {
                 <option value="hard">Hard</option>
                 <option value="complex">Complex</option>
               </select>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                Tags
+              </span>
+              {TASK_TAGS.map((tag) => {
+                const active = quickAdd.tags.includes(tag);
+                const s = TASK_TAG_STYLE[tag];
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() =>
+                      setQuickAdd((d) => ({
+                        ...d,
+                        tags: active
+                          ? d.tags.filter((t) => t !== tag)
+                          : [...d.tags, tag],
+                      }))
+                    }
+                    className={`text-[10px] px-2.5 py-0.5 rounded-full border transition-colors ${
+                      active && s
+                        ? `${s.text} ${s.bg} ${s.border}`
+                        : active
+                          ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
+                          : "border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-400"
+                    }`}
+                  >
+                    #{tag}
+                  </button>
+                );
+              })}
             </div>
             <button
               onClick={handleQuickAddSave}
@@ -1565,7 +1727,10 @@ function EntryCard({
                   <span className="text-xs sm:text-sm text-slate-300 leading-snug">
                     {task.title}
                   </span>
-                  {(task.priority || task.complexity || task.dateRange) && (
+                  {(task.priority ||
+                    task.complexity ||
+                    task.dateRange ||
+                    (task.tags && task.tags.length > 0)) && (
                     <div className="flex flex-wrap items-center gap-1">
                       {task.priority && (
                         <span
@@ -1586,6 +1751,17 @@ function EntryCard({
                           {task.dateRange}
                         </span>
                       )}
+                      {task.tags?.map((tag) => {
+                        const s = TASK_TAG_STYLE[tag];
+                        return (
+                          <span
+                            key={tag}
+                            className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
+                          >
+                            #{tag}
+                          </span>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
