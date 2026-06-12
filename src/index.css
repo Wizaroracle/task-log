@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+html,
+body {
+  background-color: #020617; /* slate-950 — prevents white flash on overscroll */
+  overscroll-behavior: none;
+}
