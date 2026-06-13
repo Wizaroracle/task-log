@@ -23,10 +23,17 @@ import {
   RefreshCw,
   Lock,
   Wand2,
+  AlertCircle,
+  BarChart2,
+  Save,
+  TrendingUp,
+  Sparkles,
+  Filter,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
-import type { CompareItem, Entry, Task } from "./utils/entries/entries";
+import type { CompareItem, Entry, EntryMedia, RaisedIssue, Task } from "./utils/entries/entries";
 import { supabase } from "./utils/supabase";
+import { uploadFile } from "./utils/upload";
 import { AddEntryModal, type InProgressItem } from "./components/AddEntryModal";
 
 // ════════════════════════════════════════════════════════════════════
@@ -170,6 +177,31 @@ const STATUS_BORDER: Record<string, string> = {
   planned: "border-l-slate-700/60",
 };
 
+const BIBLE_VERSES = [
+  { text: "Whatever you do, work at it with all your heart, as working for the Lord, not for human masters.", ref: "Colossians 3:23" },
+  { text: "I can do all this through him who gives me strength.", ref: "Philippians 4:13" },
+  { text: "Commit to the LORD whatever you do, and he will establish your plans.", ref: "Proverbs 16:3" },
+  { text: "Do not grow weary in doing good, for at the proper time we will reap a harvest if we do not give up.", ref: "Galatians 6:9" },
+  { text: "Whatever your hand finds to do, do it with all your might.", ref: "Ecclesiastes 9:10" },
+  { text: "Be strong and courageous. Do not be afraid; do not be discouraged, for the LORD your God will be with you wherever you go.", ref: "Joshua 1:9" },
+  { text: "The plans of the diligent lead to profit as surely as haste leads to poverty.", ref: "Proverbs 21:5" },
+  { text: "For we are God's handiwork, created in Christ Jesus to do good works, which God prepared in advance for us to do.", ref: "Ephesians 2:10" },
+  { text: "Trust in the LORD with all your heart and lean not on your own understanding; in all your ways submit to him, and he will make your paths straight.", ref: "Proverbs 3:5-6" },
+  { text: "For God gave us a spirit not of fear but of power and love and self-control.", ref: "2 Timothy 1:7" },
+  { text: "Let all that you do be done in love.", ref: "1 Corinthians 16:14" },
+  { text: "Blessed is the one who perseveres under trial because, having stood the test, that person will receive the crown of life.", ref: "James 1:12" },
+  { text: "She is clothed with strength and dignity; she can laugh at the days to come.", ref: "Proverbs 31:25" },
+  { text: "For nothing will be impossible with God.", ref: "Luke 1:37" },
+  { text: "And whatever you do, in word or deed, do everything in the name of the Lord Jesus, giving thanks to God the Father through him.", ref: "Colossians 3:17" },
+  { text: "The LORD will fulfill his purpose for me; your steadfast love, O LORD, endures forever.", ref: "Psalm 138:8" },
+  { text: "Let your light shine before others, that they may see your good deeds and glorify your Father in heaven.", ref: "Matthew 5:16" },
+  { text: "In all your ways acknowledge him, and he will make straight your paths.", ref: "Proverbs 3:6" },
+  { text: "Take heart! I have overcome the world.", ref: "John 16:33" },
+  { text: "No eye has seen, no ear has heard, no mind has conceived what God has prepared for those who love him.", ref: "1 Corinthians 2:9" },
+  { text: "The LORD your God is with you, the Mighty Warrior who saves.", ref: "Zephaniah 3:17" },
+  { text: "Ask and it will be given to you; seek and you will find; knock and the door will be opened to you.", ref: "Matthew 7:7" },
+] as const;
+
 function deriveEntryStatus(tasks: Task[]): "done" | "progress" | "planned" {
   if (tasks.length === 0) return "planned";
   if (tasks.every((t) => t.status === "done")) return "done";
@@ -227,6 +259,74 @@ export default function ProjectDashboard() {
   const [wizardInput, setWizardInput] = useState("");
   const [wizardError, setWizardError] = useState(false);
 
+  // Completed panel
+  const [completedOpen, setCompletedOpen] = useState(false);
+
+  // Completion toast
+  const [completionToast, setCompletionToast] = useState<{ headline: string; sub: string; verse: string; ref: string } | null>(null);
+
+  function fireCompletionToast(task?: { type?: string; complexity?: string; priority?: string }, forIssue = false) {
+    const { text, ref } = BIBLE_VERSES[Math.floor(Math.random() * BIBLE_VERSES.length)];
+    let headline = "Nice work! ✅";
+    let sub = "Another task checked off. Keep building!";
+    if (forIssue) {
+      headline = "Issue resolved! 🛡️";
+      sub = "You tracked it down and fixed it. That's real dedication.";
+    } else if (task?.type === "milestone") {
+      headline = "Milestone reached! 🏆";
+      sub = "This one marks real progress. Big deal!";
+    } else if (task?.complexity === "complex") {
+      headline = "You crushed a complex task! 🧠";
+      sub = "That kind of deep work is what separates good engineers from great ones.";
+    } else if (task?.complexity === "hard") {
+      headline = "Hard task, done! 💪";
+      sub = "Nothing stopped you. That's the mindset.";
+    } else if (task?.priority === "urgent") {
+      headline = "Clutch! ⚡";
+      sub = "You handled that urgent task like a pro. Pressure? What pressure?";
+    } else if (task?.type === "bugfix") {
+      headline = "Bug squashed! 🐛";
+      sub = "The codebase is cleaner and users are happier. Win-win.";
+    } else if (task?.type === "feature") {
+      headline = "Feature shipped! 🚀";
+      sub = "Another piece of the product brought to life. Users will love it.";
+    } else if (task?.type === "optimized") {
+      headline = "Optimization complete! ⚡";
+      sub = "Performance gains that real users will feel. Great work.";
+    } else if (task?.type === "refactor") {
+      headline = "Cleaner code! 🏗️";
+      sub = "The next dev to touch this will thank you. Future-you included.";
+    } else if (task?.type === "learning") {
+      headline = "Knowledge gained! 📖";
+      sub = "Every lesson compounds. You're investing in yourself.";
+    }
+    setCompletionToast({ headline, sub, verse: text, ref });
+    setTimeout(() => setCompletionToast(null), 7000);
+  }
+
+  // Raised Issues — report modal
+  const [issuesOpen, setIssuesOpen] = useState(false);
+  const [issues, setIssues] = useState<RaisedIssue[]>([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesProjectFilter, setIssuesProjectFilter] = useState("all");
+  const [reportDateFrom, setReportDateFrom] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 10); });
+  const [reportDateTo, setReportDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+
+  // Raised Issues — dashboard panel
+  const [editingIssue, setEditingIssue] = useState<RaisedIssue | null>(null);
+  const [issueFormOpen, setIssueFormOpen] = useState(false);
+  const [issueForm, setIssueForm] = useState<Partial<RaisedIssue>>({});
+  const [dashIssueStatusFilter, setDashIssueStatusFilter] = useState("open");
+  const [dashIssuePage, setDashIssuePage] = useState(1);
+  const [dashIssueProjectFilter, setDashIssueProjectFilter] = useState("all");
+
+  // Raised Issue detail modal (media / compare)
+  const [detailIssue, setDetailIssue] = useState<RaisedIssue | null>(null);
+
+  // Backlog inline edit
+  const [editingBacklogTask, setEditingBacklogTask] = useState<import("./components/AddEntryModal").InProgressItem | null>(null);
+  const [backlogEditForm, setBacklogEditForm] = useState<{ title: string; priority: string; complexity: string }>({ title: "", priority: "", complexity: "" });
+
   const requestWizardMode = () => {
     if (!readOnly) {
       // Already in wizard mode — lock immediately
@@ -253,6 +353,94 @@ export default function ProjectDashboard() {
     }
   };
 
+  // ── Raised Issues CRUD ──────────────────────────────────────────
+  async function loadIssues() {
+    setIssuesLoading(true);
+    const { data, error } = await supabase
+      .from("raised_issues")
+      .select("*")
+      .order("date_raised", { ascending: false });
+    if (!error && data) setIssues(data as RaisedIssue[]);
+    setIssuesLoading(false);
+  }
+
+  async function saveIssue() {
+    if (!issueForm.title?.trim() || !issueForm.project) return;
+    if (editingIssue) {
+      const { error } = await supabase
+        .from("raised_issues")
+        .update({ ...issueForm })
+        .eq("id", editingIssue.id);
+      if (!error) {
+        setIssues((prev) => prev.map((i) => i.id === editingIssue.id ? { ...i, ...issueForm } as RaisedIssue : i));
+        setEditingIssue(null);
+        setIssueFormOpen(false);
+        setIssueForm({});
+      }
+    } else {
+      const payload = {
+        project: issueForm.project,
+        title: issueForm.title,
+        description: issueForm.description ?? "",
+        type: issueForm.type ?? "bugfix",
+        priority: issueForm.priority ?? "major",
+        status: "open" as const,
+        date_raised: issueForm.date_raised ?? new Date().toISOString().slice(0, 10),
+      };
+      const { data, error } = await supabase.from("raised_issues").insert(payload).select().single();
+      if (!error && data) {
+        setIssues((prev) => [data as RaisedIssue, ...prev]);
+        setIssueFormOpen(false);
+        setIssueForm({});
+      }
+    }
+  }
+
+  async function deleteIssue(issue: RaisedIssue) {
+    const { error } = await supabase.from("raised_issues").delete().eq("id", issue.id);
+    if (!error) setIssues((prev) => prev.filter((i) => i.id !== issue.id));
+  }
+
+  async function startIssue(issue: RaisedIssue) {
+    const patch: Partial<RaisedIssue> = { status: "in_progress", date_started: new Date().toISOString().slice(0, 10) };
+    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+    if (!error) setIssues((prev) => prev.map((i) => i.id === issue.id ? { ...i, ...patch } : i));
+  }
+
+  async function toggleIssueStatus(issue: RaisedIssue) {
+    const newStatus = issue.status === "resolved" ? "open" : "resolved";
+    const patch: Partial<RaisedIssue> = { status: newStatus };
+    if (newStatus === "resolved") patch.date_resolved = new Date().toISOString().slice(0, 10);
+    else { patch.date_resolved = undefined; patch.date_started = undefined; }
+    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+    if (!error) {
+      setIssues((prev) => prev.map((i) => i.id === issue.id ? { ...i, ...patch } : i));
+      if (newStatus === "resolved") fireCompletionToast(undefined, true);
+    }
+  }
+
+  // ── Backlog task inline edit ─────────────────────────────────────
+  async function saveBacklogEdit() {
+    if (!editingBacklogTask || !backlogEditForm.title.trim()) return;
+    const entry = entries.find((e) => e.id === editingBacklogTask.entryId);
+    if (!entry) return;
+    const updatedTasks = entry.tasks.map((t) =>
+      t.title === editingBacklogTask.task.title && t.status === "planned"
+        ? {
+            ...t,
+            title: backlogEditForm.title.trim(),
+            priority: (backlogEditForm.priority || undefined) as Task["priority"],
+            complexity: (backlogEditForm.complexity || undefined) as Task["complexity"],
+          }
+        : t,
+    );
+    const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
+    if (!error) {
+      setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
+      setEditingBacklogTask(null);
+    }
+  }
+
   useEffect(() => {
     supabase
       .from("entries")
@@ -263,6 +451,8 @@ export default function ProjectDashboard() {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => { loadIssues(); }, []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -367,15 +557,21 @@ export default function ProjectDashboard() {
     return Array.from(seen.values());
   }, [entries]);
 
-  const filteredPlannedItems = useMemo(
-    () =>
+  const PRIORITY_ORDER: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
+
+  const filteredPlannedItems = useMemo(() => {
+    const base =
       backlogTagFilter === "all"
         ? plannedItems
         : plannedItems.filter((item) =>
             (item.task.tags ?? []).includes(backlogTagFilter),
-          ),
-    [plannedItems, backlogTagFilter],
-  );
+          );
+    return [...base].sort(
+      (a, b) =>
+        (PRIORITY_ORDER[a.task.priority ?? ""] ?? 3) -
+        (PRIORITY_ORDER[b.task.priority ?? ""] ?? 3),
+    );
+  }, [plannedItems, backlogTagFilter]);
 
   const stats = useMemo(() => {
     const base =
@@ -383,27 +579,21 @@ export default function ProjectDashboard() {
         ? entries
         : entries.filter((e) => e.project === project);
     const allTasks = base.flatMap((e) => e.tasks);
+    const resolvedIssueCount = issues.filter(
+      (i) => i.status === "resolved" && (project === "all" || i.project === project)
+    ).length;
     return {
       total: allTasks.length,
-      optimized: allTasks.filter((t) => t.type === "optimized").length,
       features: allTasks.filter((t) => t.type === "feature").length,
-      bugs: allTasks.filter((t) => t.type === "bugfix").length,
+      bugs: allTasks.filter((t) => t.type === "bugfix").length + resolvedIssueCount,
+      optimized: allTasks.filter((t) => t.type === "optimized").length,
+      tasks: allTasks.filter((t) => (t.type ?? "task") === "task").length,
+      milestones: allTasks.filter((t) => t.type === "milestone").length,
+      refactors: allTasks.filter((t) => t.type === "refactor").length,
+      learnings: allTasks.filter((t) => t.type === "learning").length,
     };
-  }, [entries, project]);
+  }, [entries, issues, project]);
 
-  async function handleDelete(entry: Entry) {
-    if (!window.confirm(`Delete "${entry.title}"?`)) return;
-    const { error } = await supabase
-      .from("entries")
-      .delete()
-      .eq("id", entry.id);
-    if (!error) setEntries((prev) => prev.filter((e) => e.id !== entry.id));
-  }
-
-  function clearTypeStatus() {
-    setType("all");
-    setStatus("all");
-  }
 
   function formatDateShort(iso: string): string {
     const d = new Date(iso + "T00:00:00");
@@ -427,6 +617,7 @@ export default function ProjectDashboard() {
       startDate === today
         ? formatDateShort(today)
         : `${formatDateShort(startDate)} → ${formatDateShort(today)}`;
+    const taskMeta = affected[0]?.tasks.find(t => t.title === taskTitle && t.status === "progress");
     try {
       for (const entry of affected) {
         const updatedTasks = entry.tasks.map((t) =>
@@ -445,6 +636,7 @@ export default function ProjectDashboard() {
             ),
           );
       }
+      fireCompletionToast(taskMeta);
     } finally {
       setActionLoading(null);
     }
@@ -482,49 +674,86 @@ export default function ProjectDashboard() {
     setActionLoading(item.task.title);
     const today = new Date().toISOString().slice(0, 10);
     const sourceEntry = entries.find((e) => e.id === item.entryId);
-    const todayEntry = entries.find(
-      (e) =>
-        e.date === today &&
-        e.id !== item.entryId &&
-        e.tasks.some((t) => t.status !== "planned"),
-    );
+    if (!sourceEntry) { setActionLoading(null); return; }
+
+    const taskAsProgress: Task = { ...item.task, status: "progress" };
+
     try {
-      if (sourceEntry) {
-        const updatedTasks = sourceEntry.tasks.map((t) =>
-          t.title === item.task.title && t.status === "planned"
-            ? { ...t, status: "progress" as const }
-            : t,
+      // Snapshot to accumulate all mutations, applied in one setEntries call at the end
+      let snap = [...entries];
+      const applyUpdate = (id: string, tasks: Task[], date?: string) => {
+        snap = snap.map(e => e.id === id ? { ...e, tasks, ...(date ? { date } : {}) } : e);
+      };
+      const applyDelete = (id: string) => { snap = snap.filter(e => e.id !== id); };
+
+      // Find today's consolidation entry (dated today, not the source)
+      const todayEntry = entries.find(e => e.date === today && e.id !== item.entryId);
+
+      if (sourceEntry.date === today) {
+        // Source is already today — just flip status in place
+        const updated = sourceEntry.tasks.map(t =>
+          t.title === item.task.title && t.status === "planned" ? taskAsProgress : t
         );
-        const { error } = await supabase
-          .from("entries")
-          .update({ tasks: updatedTasks })
-          .eq("id", sourceEntry.id);
-        if (!error)
-          setEntries((prev) =>
-            prev.map((e) =>
-              e.id === sourceEntry.id ? { ...e, tasks: updatedTasks } : e,
-            ),
-          );
+        await supabase.from("entries").update({ tasks: updated }).eq("id", sourceEntry.id);
+        applyUpdate(sourceEntry.id, updated);
+
+      } else if (todayEntry) {
+        // Consolidate: add task to today's existing entry (deduplicated)
+        if (!todayEntry.tasks.some(t => t.title === item.task.title)) {
+          const newTasks = [...todayEntry.tasks, taskAsProgress];
+          await supabase.from("entries").update({ tasks: newTasks }).eq("id", todayEntry.id);
+          applyUpdate(todayEntry.id, newTasks);
+        }
+        // Remove task from source entry; delete source if it becomes empty
+        const remainingSource = sourceEntry.tasks.filter(
+          t => !(t.title === item.task.title && t.status === "planned")
+        );
+        if (remainingSource.length === 0) {
+          await supabase.from("entries").delete().eq("id", sourceEntry.id);
+          applyDelete(sourceEntry.id);
+        } else {
+          await supabase.from("entries").update({ tasks: remainingSource }).eq("id", sourceEntry.id);
+          applyUpdate(sourceEntry.id, remainingSource);
+        }
+
+      } else {
+        // No today's entry — check how many tasks remain in source after removing this one
+        const remainingSource = sourceEntry.tasks.filter(
+          t => !(t.title === item.task.title && t.status === "planned")
+        );
+        if (remainingSource.length === 0) {
+          // Source only had this task → repurpose it as today's entry
+          await supabase.from("entries").update({ tasks: [taskAsProgress], date: today }).eq("id", sourceEntry.id);
+          applyUpdate(sourceEntry.id, [taskAsProgress], today);
+        } else {
+          // Source has other tasks → trim source, create a fresh today entry
+          await supabase.from("entries").update({ tasks: remainingSource }).eq("id", sourceEntry.id);
+          applyUpdate(sourceEntry.id, remainingSource);
+          const { data: inserted } = await supabase
+            .from("entries")
+            .insert({ project: sourceEntry.project, date: today, title: sourceEntry.title, tasks: [taskAsProgress] })
+            .select()
+            .single();
+          if (inserted) snap = [...snap, inserted as Entry];
+        }
       }
-      if (
-        todayEntry &&
-        !todayEntry.tasks.some((t) => t.title === item.task.title)
-      ) {
-        const updatedTasks = [
-          ...todayEntry.tasks,
-          { ...item.task, status: "progress" as const },
-        ];
-        const { error } = await supabase
-          .from("entries")
-          .update({ tasks: updatedTasks })
-          .eq("id", todayEntry.id);
-        if (!error)
-          setEntries((prev) =>
-            prev.map((e) =>
-              e.id === todayEntry.id ? { ...e, tasks: updatedTasks } : e,
-            ),
-          );
+
+      // Remove any other "planned" duplicates of this task across remaining entries
+      const skipIds = new Set([item.entryId, todayEntry?.id].filter(Boolean) as string[]);
+      for (const e of entries.filter(en => !skipIds.has(en.id))) {
+        const hasDuplicate = e.tasks.some(t => t.title === item.task.title && t.status === "planned");
+        if (!hasDuplicate) continue;
+        const cleaned = e.tasks.filter(t => !(t.title === item.task.title && t.status === "planned"));
+        if (cleaned.length === 0) {
+          await supabase.from("entries").delete().eq("id", e.id);
+          applyDelete(e.id);
+        } else {
+          await supabase.from("entries").update({ tasks: cleaned }).eq("id", e.id);
+          applyUpdate(e.id, cleaned);
+        }
       }
+
+      setEntries(snap);
     } finally {
       setActionLoading(null);
     }
@@ -655,6 +884,47 @@ export default function ProjectDashboard() {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {(() => {
+              const doneCount = entries.flatMap(e => e.tasks).filter(t => t.status === "done").length
+                + issues.filter(i => i.status === "resolved").length;
+              return (
+                <button
+                  onClick={() => setCompletedOpen(true)}
+                  className="relative flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:10ms]"
+                  title="Completed Work"
+                >
+                  <CheckCircle2 size={14} />
+                  <span>Completed</span>
+                  {doneCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-emerald-500 text-white text-[9px] font-bold px-1 leading-none">
+                      {doneCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
+            <button
+              onClick={() => setIssuesOpen(true)}
+              className="relative flex items-center gap-1.5 rounded-xl border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-red-400/20 transition-colors animate-fade-in-up [animation-delay:20ms]"
+              title="Issues Report"
+            >
+              <AlertCircle size={14} />
+              <span>Issues</span>
+              {issues.filter(i => i.status !== "resolved").length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-red-500 text-white text-[9px] font-bold px-1 leading-none">
+                  {issues.filter(i => i.status !== "resolved").length}
+                </span>
+              )}
+            </button>
+            {(() => {
+              const ipCount = inProgressItems.length + issues.filter(i => i.status === "in_progress").length;
+              return ipCount > 0 ? (
+                <span className="flex items-center gap-1.5 text-xs text-yellow-400/80 font-medium px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl bg-yellow-400/8 border border-yellow-400/20 animate-fade-in-up [animation-delay:30ms]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                  {ipCount} in progress
+                </span>
+              ) : null;
+            })()}
             {!readOnly && (
               <button
                 onClick={() => setFormOpen(true)}
@@ -671,53 +941,20 @@ export default function ProjectDashboard() {
           </div>
         </header>
 
-        {/* ── Stats (clickable) ──────────────────────────────── */}
+        {/* ── Stats ──────────────────────────────────────────── */}
         <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-8 sm:mb-10">
-          <StatCard
-            label="Total Tasks"
-            value={stats.total}
-            accent="border-teal-400/60"
-            delay={0}
-            active={type === "all" && status === "all"}
-            onClick={clearTypeStatus}
-          />
-          <StatCard
-            label="Optimized"
-            value={stats.optimized}
-            accent="border-cyan-400/60"
-            delay={60}
-            active={type === "optimized"}
-            onClick={() => {
-              setType(type === "optimized" ? "all" : "optimized");
-              setStatus("all");
-            }}
-          />
-          <StatCard
-            label="Features"
-            value={stats.features}
-            accent="border-emerald-300/60"
-            delay={120}
-            active={type === "feature"}
-            onClick={() => {
-              setType(type === "feature" ? "all" : "feature");
-              setStatus("all");
-            }}
-          />
-          <StatCard
-            label="Bugs Fixed"
-            value={stats.bugs}
-            accent="border-orange-400/60"
-            delay={180}
-            active={type === "bugfix"}
-            onClick={() => {
-              setType(type === "bugfix" ? "all" : "bugfix");
-              setStatus("all");
-            }}
-          />
+          <StatCard label="Total Tasks"  value={stats.total}      accent="border-teal-400/60"    icon={CheckCircle2}      iconColor="text-teal-400"    delay={0}   />
+          <StatCard label="Features"     value={stats.features}   accent="border-emerald-300/60" icon={ArrowUpNarrowWide} iconColor="text-emerald-400" delay={40}  />
+          <StatCard label="Bug Fixes"    value={stats.bugs}       accent="border-orange-400/60"  icon={Bug}               iconColor="text-orange-400"  delay={80}  />
+          <StatCard label="Optimized"    value={stats.optimized}  accent="border-cyan-400/60"    icon={Zap}               iconColor="text-cyan-400"    delay={120} />
+          <StatCard label="Tasks"        value={stats.tasks}      accent="border-teal-300/60"    icon={CheckCircle2}      iconColor="text-teal-300"    delay={160} />
+          <StatCard label="Milestones"   value={stats.milestones} accent="border-yellow-400/60"  icon={ArrowRight}        iconColor="text-yellow-400"  delay={200} />
+          <StatCard label="Refactored"   value={stats.refactors}  accent="border-purple-400/60"  icon={RefreshCw}         iconColor="text-purple-400"  delay={240} />
+          <StatCard label="Learnings"    value={stats.learnings}  accent="border-violet-400/60"  icon={BookOpen}          iconColor="text-violet-400"  delay={280} />
         </section>
 
-        {/* ── In Progress + Planned panels ───────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
+        {/* ── In Progress + Issues panels ────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
           {/* In Progress */}
           {(() => {
             const IP_PER_PAGE = 5;
@@ -728,6 +965,8 @@ export default function ProjectDashboard() {
               (inProgressPage - 1) * IP_PER_PAGE,
               inProgressPage * IP_PER_PAGE,
             );
+            const inProgressIssues = issues.filter(i => i.status === "in_progress");
+            const totalInProgress = inProgressItems.length + inProgressIssues.length;
             return (
               <section className="flex flex-col gap-3 p-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/5">
                 <div className="flex items-center gap-2">
@@ -736,10 +975,10 @@ export default function ProjectDashboard() {
                     In Progress
                   </span>
                   <span className="text-[11px] text-slate-600">
-                    {inProgressItems.length}
+                    {totalInProgress}
                   </span>
                 </div>
-                {inProgressItems.length === 0 ? (
+                {totalInProgress === 0 ? (
                   <p className="text-xs text-slate-600 py-2">
                     No tasks in progress.
                   </p>
@@ -835,12 +1074,181 @@ export default function ProjectDashboard() {
                         </button>
                       </div>
                     )}
+                    {/* In-progress raised issues */}
+                    {inProgressIssues.length > 0 && (
+                      <div className="flex flex-col gap-2 pt-2 border-t border-yellow-400/10">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-red-400/70">Raised Issues</p>
+                        </div>
+                        {inProgressIssues.map(issue => {
+                          const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+                          const pm = PRIORITY_META[issue.priority];
+                          const hasMedia = (issue.media?.length ?? 0) > 0 || (issue.compare?.length ?? 0) > 0;
+                          return (
+                            <li key={issue.id} className="flex items-start gap-2.5 py-2 border-b border-yellow-400/10 last:border-0 list-none">
+                              <AlertCircle size={12} className="mt-1 text-red-400 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <button
+                                  onClick={() => setDetailIssue(issue)}
+                                  className="text-sm text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors"
+                                >
+                                  {issue.title}
+                                </button>
+                                {issue.description && (
+                                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>
+                                )}
+                                <div className="flex flex-wrap items-center gap-1 mt-1">
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                                  {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
+                                  {hasMedia && <span className="text-[9px] text-slate-500 flex items-center gap-0.5"><ImageIcon size={9} /> media</span>}
+                                  {issue.date_started && <span className="text-[10px] text-slate-600">started {issue.date_started}</span>}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button onClick={() => setDetailIssue(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap">
+                                  + Media
+                                </button>
+                                {!readOnly && (
+                                  <button onClick={() => toggleIssueStatus(issue)} className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors whitespace-nowrap">
+                                    ✓ Resolve
+                                  </button>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </div>
+                    )}
                   </>
                 )}
               </section>
             );
           })()}
 
+          {/* ── Raised Issues dashboard panel ── */}
+          {(() => {
+            const ISS_PER_PAGE = 7;
+            const PRIORITY_RANK: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
+            const STATUS_ORDER: Record<string, number> = { open: 0, in_progress: 1, resolved: 2 };
+            const sortedIssues = [...issues]
+              .filter(i => dashIssueProjectFilter === "all" || i.project === dashIssueProjectFilter)
+              .filter(i => dashIssueStatusFilter === "all" ? true : i.status === dashIssueStatusFilter)
+              .sort((a, b) => {
+                const sd = (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3);
+                if (sd !== 0) return sd;
+                return (PRIORITY_RANK[a.priority] ?? 3) - (PRIORITY_RANK[b.priority] ?? 3);
+              });
+            const issTotalPages = Math.ceil(sortedIssues.length / ISS_PER_PAGE);
+            const pagedIss = sortedIssues.slice((dashIssuePage - 1) * ISS_PER_PAGE, dashIssuePage * ISS_PER_PAGE);
+            const openCount = issues.filter(i => i.status === "open").length;
+            const dashProjects = Array.from(new Set(entries.map(e => e.project)));
+            return (
+              <section className="rounded-2xl border border-red-900/30 bg-slate-900/60 backdrop-blur-sm overflow-hidden flex flex-col animate-fade-in-up [animation-delay:80ms]">
+                {/* Panel header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-red-900/20 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle size={13} className="text-red-400" />
+                    <span className="text-xs font-bold tracking-[0.2em] uppercase text-red-400">Raised Issues</span>
+                    {openCount > 0 && (
+                      <span className="flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-red-500/20 text-red-300 text-[9px] font-bold px-1.5 ring-1 ring-red-500/30">
+                        {openCount}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!readOnly && (
+                      <button
+                        onClick={() => { setIssueFormOpen(true); setEditingIssue(null); setIssueForm({ project: dashProjects[0] ?? "", type: "bugfix", priority: "major", date_raised: new Date().toISOString().slice(0,10) }); }}
+                        className="text-[11px] text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-1"
+                      >
+                        + Raise issue
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Filters */}
+                <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-800/40 flex-wrap">
+                  <select value={dashIssueProjectFilter} onChange={e => { setDashIssueProjectFilter(e.target.value); setDashIssuePage(1); }} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-400 text-[10px] px-2 py-1 outline-none">
+                    <option value="all">All Projects</option>
+                    {dashProjects.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <div className="flex rounded-lg border border-slate-800 overflow-hidden text-[10px]">
+                    {([["all","All"],["open","Open"],["in_progress","In Progress"],["resolved","Resolved"]] as const).map(([s, label]) => (
+                      <button key={s} onClick={() => { setDashIssueStatusFilter(s); setDashIssuePage(1); }} className={`px-2.5 py-1 font-medium transition-colors ${dashIssueStatusFilter === s ? "bg-slate-800 text-slate-200" : "text-slate-500 hover:text-slate-300"}`}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Add / Edit form */}
+                {issueFormOpen && (
+                  <div className="px-4 py-3 border-b border-red-900/20 bg-red-400/5 flex flex-col gap-2">
+                    <input autoFocus placeholder="Issue title *" value={issueForm.title ?? ""} onChange={e => setIssueForm(f => ({ ...f, title: e.target.value }))} className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500/40" />
+                    <textarea placeholder="Description (optional)" value={issueForm.description ?? ""} onChange={e => setIssueForm(f => ({ ...f, description: e.target.value }))} rows={2} className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-300 outline-none focus:border-red-500/40 resize-none" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <select value={issueForm.project ?? ""} onChange={e => setIssueForm(f => ({ ...f, project: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-xs px-2 py-1.5 outline-none">
+                        <option value="">Project *</option>
+                        {dashProjects.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                      <select value={issueForm.type ?? "bugfix"} onChange={e => setIssueForm(f => ({ ...f, type: e.target.value as RaisedIssue["type"] }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-xs px-2 py-1.5 outline-none">
+                        <option value="bugfix">Bug Fix</option>
+                        <option value="feature">Feature</option>
+                        <option value="optimized">Optimized</option>
+                        <option value="task">Task</option>
+                        <option value="other">Other</option>
+                      </select>
+                      <select value={issueForm.priority ?? "major"} onChange={e => setIssueForm(f => ({ ...f, priority: e.target.value as RaisedIssue["priority"] }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-xs px-2 py-1.5 outline-none">
+                        <option value="urgent">Urgent</option>
+                        <option value="major">Major</option>
+                        <option value="minor">Minor</option>
+                      </select>
+                      <input type="date" value={issueForm.date_raised ?? new Date().toISOString().slice(0,10)} onChange={e => setIssueForm(f => ({ ...f, date_raised: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-xs px-2 py-1.5 outline-none" />
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={saveIssue} disabled={!issueForm.title?.trim() || !issueForm.project} className="flex-1 rounded-lg border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-semibold py-2 hover:bg-red-400/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                        {editingIssue ? "Save Changes" : "Raise Issue"}
+                      </button>
+                      <button onClick={() => { setIssueFormOpen(false); setEditingIssue(null); setIssueForm({}); }} className="px-3 rounded-lg border border-slate-700 text-slate-400 text-xs hover:bg-slate-800 transition-colors">Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* List */}
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-0">
+                  {issuesLoading ? (
+                    <p className="text-xs text-slate-600 text-center py-6">Loading…</p>
+                  ) : sortedIssues.length === 0 ? (
+                    <p className="text-xs text-slate-600 text-center py-6">No issues found.</p>
+                  ) : (
+                    <ul className="flex flex-col gap-1.5">
+                      {pagedIss.map(issue => (
+                        <IssueRow key={issue.id} issue={issue} readOnly={readOnly}
+                          onEdit={iss => { setEditingIssue(iss); setIssueForm(iss); setIssueFormOpen(true); }}
+                          onDelete={deleteIssue}
+                          onStart={startIssue}
+                          onToggle={toggleIssueStatus}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {/* Pagination */}
+                {issTotalPages > 1 && (
+                  <div className="flex items-center justify-between px-4 py-2 border-t border-red-900/20">
+                    <button onClick={() => setDashIssuePage(p => Math.max(1, p - 1))} disabled={dashIssuePage === 1} className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors">← Prev</button>
+                    <span className="text-[10px] text-slate-600">{dashIssuePage} / {issTotalPages}</span>
+                    <button onClick={() => setDashIssuePage(p => Math.min(issTotalPages, p + 1))} disabled={dashIssuePage === issTotalPages} className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors">Next →</button>
+                  </div>
+                )}
+              </section>
+            );
+          })()}
+        </div>
+
+        {/* ── Backlog / Planning ─────────────────────────────── */}
+        <div className="mb-8">
           {/* Planned / Backlog */}
           {(() => {
             const BL_PER_PAGE = 7;
@@ -944,63 +1352,102 @@ export default function ProjectDashboard() {
                                 : "border-transparent"
                             } border-b border-b-blue-400/10 last:border-b-0`}
                           >
-                            <span
-                              className={`shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}
-                            >
-                              ⠿
-                            </span>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-slate-300 leading-snug">
-                                {item.task.title}
-                              </p>
-                              <div className="flex flex-wrap items-center gap-1 mt-0.5">
-                                {item.task.priority && (
-                                  <span
-                                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}
-                                  >
-                                    {PRIORITY_META[item.task.priority].label}
-                                  </span>
-                                )}
-                                {item.task.complexity && (
-                                  <span
-                                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
-                                  >
-                                    {
-                                      COMPLEXITY_META[item.task.complexity]
-                                        .label
-                                    }
-                                  </span>
-                                )}
-                                {(item.task.tags ?? []).map((tag) => {
-                                  const s = TASK_TAG_STYLE[tag];
-                                  return (
-                                    <span
-                                      key={tag}
-                                      className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
-                                    >
-                                      #{tag}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            </div>
                             {!readOnly && (
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                  onClick={() => startPlannedTask(item)}
-                                  disabled={actionLoading === item.task.title}
-                                  className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
-                                >
-                                  ▶ Start
-                                </button>
-                                <button
-                                  onClick={() => deleteBacklogTask(item)}
-                                  className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                                  title="Remove from backlog"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                              <span className={`shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}>⠿</span>
+                            )}
+                            {editingBacklogTask?.task.title === item.task.title ? (
+                              /* ── Inline edit form ── */
+                              <div className="flex-1 flex flex-col gap-1.5">
+                                <input
+                                  autoFocus
+                                  value={backlogEditForm.title}
+                                  onChange={(e) => setBacklogEditForm((f) => ({ ...f, title: e.target.value }))}
+                                  onKeyDown={(e) => { if (e.key === "Enter") saveBacklogEdit(); if (e.key === "Escape") setEditingBacklogTask(null); }}
+                                  className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-emerald-500/60"
+                                />
+                                <div className="flex gap-1.5">
+                                  <select
+                                    value={backlogEditForm.priority}
+                                    onChange={(e) => setBacklogEditForm((f) => ({ ...f, priority: e.target.value }))}
+                                    className="flex-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
+                                  >
+                                    <option value="">Priority</option>
+                                    <option value="urgent">Urgent</option>
+                                    <option value="major">Major</option>
+                                    <option value="minor">Minor</option>
+                                  </select>
+                                  <select
+                                    value={backlogEditForm.complexity}
+                                    onChange={(e) => setBacklogEditForm((f) => ({ ...f, complexity: e.target.value }))}
+                                    className="flex-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
+                                  >
+                                    <option value="">Complexity</option>
+                                    <option value="simple">Simple</option>
+                                    <option value="hard">Hard</option>
+                                    <option value="complex">Complex</option>
+                                  </select>
+                                </div>
+                                <div className="flex gap-1.5">
+                                  <button onClick={saveBacklogEdit} className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors">
+                                    <Save size={10} /> Save
+                                  </button>
+                                  <button onClick={() => setEditingBacklogTask(null)} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors">
+                                    Cancel
+                                  </button>
+                                </div>
                               </div>
+                            ) : (
+                              /* ── Normal display ── */
+                              <>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm text-slate-300 leading-snug">{item.task.title}</p>
+                                  <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                    {item.task.priority && (
+                                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}>
+                                        {PRIORITY_META[item.task.priority].label}
+                                      </span>
+                                    )}
+                                    {item.task.complexity && (
+                                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}>
+                                        {COMPLEXITY_META[item.task.complexity].label}
+                                      </span>
+                                    )}
+                                    {(item.task.tags ?? []).map((tag) => {
+                                      const s = TASK_TAG_STYLE[tag];
+                                      return (
+                                        <span key={tag} className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}>
+                                          #{tag}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                {!readOnly && (
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      onClick={() => { setEditingBacklogTask(item); setBacklogEditForm({ title: item.task.title, priority: item.task.priority ?? "", complexity: item.task.complexity ?? "" }); }}
+                                      className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+                                      title="Edit task"
+                                    >
+                                      <Pencil size={12} />
+                                    </button>
+                                    <button
+                                      onClick={() => startPlannedTask(item)}
+                                      disabled={actionLoading === item.task.title}
+                                      className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
+                                    >
+                                      ▶ Start
+                                    </button>
+                                    <button
+                                      onClick={() => deleteBacklogTask(item)}
+                                      className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                                      title="Remove from backlog"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                )}
+                              </>
                             )}
                           </li>
                         );
@@ -1110,26 +1557,91 @@ export default function ProjectDashboard() {
           )}
         </section>
 
-        {/* ── Entries grid ───────────────────────────────────── */}
+        {/* ── Entries grid — one card per day, raised issues merged ─── */}
         {(() => {
+          // Raised issues by date (in_progress / resolved only)
+          const visibleIssues = issues.filter(i => i.status !== "open");
+          const issuesByDate = new Map<string, RaisedIssue[]>();
+          for (const issue of visibleIssues) {
+            const key = issue.date_started ?? issue.date_raised;
+            if (!issuesByDate.has(key)) issuesByDate.set(key, []);
+            issuesByDate.get(key)!.push(issue);
+          }
+
+          // Consolidate filtered entries: one card per date (merge tasks)
+          const byDate = new Map<string, Entry[]>();
+          for (const e of filtered) {
+            if (!byDate.has(e.date)) byDate.set(e.date, []);
+            byDate.get(e.date)!.push(e);
+          }
+          const consolidated: Entry[] = Array.from(byDate.entries())
+            .sort(([a], [b]) => b.localeCompare(a))
+            .map(([, dayEntries]) => {
+              if (dayEntries.length === 1) return dayEntries[0];
+              // Merge tasks; prefer "progress"/"done" over "planned" for same title
+              const seen = new Map<string, Task>();
+              for (const t of dayEntries.flatMap(e => e.tasks)) {
+                const existing = seen.get(t.title);
+                if (!existing || t.status === "progress" || (t.status === "done" && existing.status === "planned")) {
+                  seen.set(t.title, t);
+                }
+              }
+              const primary = dayEntries[0];
+              return { ...primary, tasks: Array.from(seen.values()) };
+            });
+
+          // Orphan issues: date not present in any filtered entry
+          const entryDates = new Set(consolidated.map(e => e.date));
+          const orphanIssues = visibleIssues.filter(i => !entryDates.has(i.date_started ?? i.date_raised));
+
           const ITEMS_PER_PAGE = 9;
-          const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
-          const paged = filtered.slice(
+          const totalPages = Math.ceil(consolidated.length / ITEMS_PER_PAGE);
+          const paged = consolidated.slice(
             (page - 1) * ITEMS_PER_PAGE,
             page * ITEMS_PER_PAGE,
           );
+
+          // Group orphan issues by date — one card per day
+          const orphanByDate = new Map<string, RaisedIssue[]>();
+          for (const issue of orphanIssues) {
+            const key = issue.date_started ?? issue.date_raised;
+            if (!orphanByDate.has(key)) orphanByDate.set(key, []);
+            orphanByDate.get(key)!.push(issue);
+          }
+          const orphanGroups = Array.from(orphanByDate.entries()).sort(([a], [b]) => b.localeCompare(a));
+
+          const orphanGrid = orphanGroups.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 mb-6">
+              {orphanGroups.map(([date, groupIssues], i) => (
+                <GroupedIssueCard
+                  key={date}
+                  date={date}
+                  issues={groupIssues}
+                  readOnly={readOnly}
+                  delay={Math.min(i, 6) * 50}
+                  onView={setDetailIssue}
+                  onResolve={toggleIssueStatus}
+                />
+              ))}
+            </div>
+          ) : null;
+
           return loading ? (
             <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
               Loading entries…
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
-              No entries yet — hit{" "}
-              <span className="text-emerald-400 font-medium">+ New Entry</span>{" "}
-              to log your first task.
-            </div>
+          ) : consolidated.length === 0 ? (
+            <>
+              {orphanGrid}
+              <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
+                No entries yet — hit{" "}
+                <span className="text-emerald-400 font-medium">+ New Entry</span>{" "}
+                to log your first task.
+              </div>
+            </>
           ) : (
             <>
+              {orphanGrid}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
                 {paged.map((entry, i) => (
                   <EntryCard
@@ -1140,8 +1652,10 @@ export default function ProjectDashboard() {
                     readOnly={readOnly}
                     onView={() => setViewingEntry(entry)}
                     onEdit={() => setEditingEntry(entry)}
-                    onDelete={() => handleDelete(entry)}
                     onImageClick={setZoomSrc}
+                    raisedIssues={issuesByDate.get(entry.date) ?? []}
+                    onViewIssue={setDetailIssue}
+                    onResolveIssue={toggleIssueStatus}
                   />
                 ))}
               </div>
@@ -1325,10 +1839,55 @@ export default function ProjectDashboard() {
         readOnly={readOnly}
         onToggleMode={requestWizardMode}
       />
+      <RaisedIssuesPanel
+        open={issuesOpen}
+        onClose={() => setIssuesOpen(false)}
+        issues={issues}
+        entries={entries}
+        projectFilter={issuesProjectFilter}
+        onProjectFilterChange={setIssuesProjectFilter}
+        dateFrom={reportDateFrom}
+        onDateFromChange={setReportDateFrom}
+        dateTo={reportDateTo}
+        onDateToChange={setReportDateTo}
+      />
+      <CompletedPanel
+        open={completedOpen}
+        onClose={() => setCompletedOpen(false)}
+        entries={entries}
+        issues={issues}
+      />
+      <CompletionToast toast={completionToast} onClose={() => setCompletionToast(null)} />
+      {detailIssue && (
+        <IssueDetailModal
+          issue={detailIssue}
+          readOnly={readOnly}
+          onClose={() => setDetailIssue(null)}
+          onSaved={(updated) => {
+            setIssues(prev => prev.map(i => i.id === updated.id ? updated : i));
+            setDetailIssue(updated);
+          }}
+        />
+      )}
       <AddEntryModal
         open={formOpen || editingEntry !== null}
         initialEntry={editingEntry ?? undefined}
-        inProgressItems={inProgressItems}
+        inProgressItems={[
+          ...inProgressItems,
+          ...issues
+            .filter(i => i.status === "in_progress")
+            .map(i => ({
+              entryId: `issue-${i.id}`,
+              entryTitle: i.title,
+              entryDate: i.date_started ?? i.date_raised,
+              task: {
+                title: i.title,
+                type: "bugfix" as const,
+                status: "progress" as const,
+                priority: i.priority,
+              },
+            })),
+        ]}
         seedTask={formSeedTask ?? undefined}
         onClose={() => {
           setFormOpen(false);
@@ -1834,6 +2393,13 @@ function ProfilePanel({
           </div>
         </div>
 
+        {/* Guide hint — below wizard mode button */}
+        <div className="px-5 py-2.5 border-b border-slate-800/60 bg-slate-950/30 shrink-0">
+          <p className="text-[11px] text-slate-500 leading-relaxed">
+            <span className="text-slate-400">↓ Scroll</span> to view the full summary — overall task breakdown and per-project metrics.
+          </p>
+        </div>
+
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 flex flex-col gap-5">
           {/* Identity */}
@@ -2122,37 +2688,29 @@ function StatCard({
   label,
   value,
   accent,
+  iconColor,
+  icon: Icon,
   delay = 0,
-  active = false,
-  onClick,
 }: {
   label: string;
   value: number;
   accent: string;
+  iconColor: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
   delay?: number;
-  active?: boolean;
-  onClick?: () => void;
 }) {
   return (
     <div
-      onClick={onClick}
-      className={`rounded-xl border bg-slate-900/60 backdrop-blur-sm px-4 py-3 sm:px-5 sm:py-4 border-l-4 ${accent} animate-fade-in-up select-none transition-all duration-200 ${
-        onClick ? "cursor-pointer" : ""
-      } ${
-        active
-          ? "border-slate-600 bg-slate-800/70 ring-1 ring-emerald-500/20"
-          : "border-slate-800 hover:border-slate-600 hover:bg-slate-800/40"
-      }`}
+      className={`rounded-xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm px-4 py-3 sm:px-5 sm:py-4 border-l-4 ${accent} animate-fade-in-up select-none transition-all duration-200 hover:border-slate-600 hover:bg-slate-800/40`}
       style={{ animationDelay: `${delay}ms` }}
     >
+      <div className="flex items-center justify-between mb-1">
+        <Icon size={14} className={iconColor} />
+      </div>
       <div className="font-serif text-2xl sm:text-3xl leading-none text-slate-50">
         {value}
       </div>
-      <div
-        className={`mt-1.5 text-[10px] sm:text-[11px] tracking-[0.12em] uppercase transition-colors ${
-          active ? "text-emerald-400" : "text-slate-400"
-        }`}
-      >
+      <div className="mt-1.5 text-[10px] sm:text-[11px] tracking-[0.12em] uppercase text-slate-400">
         {label}
       </div>
     </div>
@@ -2250,8 +2808,10 @@ function EntryCard({
   readOnly = false,
   onView,
   onEdit,
-  onDelete,
   onImageClick,
+  raisedIssues = [],
+  onViewIssue,
+  onResolveIssue,
 }: {
   entry: Entry;
   activeType?: string;
@@ -2259,8 +2819,11 @@ function EntryCard({
   readOnly?: boolean;
   onView: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   onImageClick: (src: string) => void;
+  raisedIssues?: RaisedIssue[];
+  onViewIssue?: (issue: RaisedIssue) => void;
+  onResolveIssue?: (issue: RaisedIssue) => void;
 }) {
   const visibleTasks =
     activeType === "all"
@@ -2300,13 +2863,6 @@ function EntryCard({
                   >
                     <Pencil size={12} />
                   </button>
-                  <button
-                    onClick={onDelete}
-                    className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 size={12} />
-                  </button>
                 </>
               )}
             </div>
@@ -2319,6 +2875,53 @@ function EntryCard({
           {entry.title}
         </h3>
       </div>
+
+      {/* Embedded raised issues for this date — shown at top before tasks */}
+      {raisedIssues.length > 0 && (
+        <div className="border-b border-red-900/20 px-4 sm:px-5 pt-3 pb-3 flex flex-col gap-2.5">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-red-400/60">Raised Issues</p>
+          {raisedIssues.map(issue => {
+            const resolved = issue.status === "resolved";
+            const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+            const pm = PRIORITY_META[issue.priority];
+            const hasMedia = (issue.media?.length ?? 0) + (issue.compare?.length ?? 0) > 0;
+            return (
+              <div key={issue.id} className={`flex items-start gap-2.5 pl-2.5 border-l-2 ${resolved ? "border-emerald-500/40" : "border-red-500/50"}`}>
+                <div className="flex-1 min-w-0">
+                  <button onClick={() => onViewIssue?.(issue)} className="text-xs text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors">
+                    {issue.title}
+                  </button>
+                  {issue.description && (
+                    <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-1 mt-1">
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                    {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                    {resolved
+                      ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-emerald-400 bg-emerald-400/10">Resolved</span>
+                      : <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>
+                    }
+                    {hasMedia && <span className="text-[9px] text-slate-500 flex items-center gap-0.5"><ImageIcon size={9} /> media</span>}
+                  </div>
+                </div>
+                {!readOnly && (
+                  <button
+                    onClick={() => onResolveIssue?.(issue)}
+                    className={`text-[10px] px-2 py-1 rounded-lg border transition-colors shrink-0 ${
+                      resolved
+                        ? "border-slate-700 text-slate-500 hover:text-yellow-400 hover:border-yellow-700/40"
+                        : "border-emerald-700/40 text-emerald-300 hover:bg-emerald-400/10"
+                    }`}
+                  >
+                    {resolved ? "Reopen" : "✓ Resolve"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Task list */}
       <ul className="px-4 sm:px-5 py-3 flex flex-col gap-3">
@@ -2460,6 +3063,7 @@ function EntryCard({
           ))}
         </div>
       )}
+
     </article>
   );
 }
@@ -2664,5 +3268,867 @@ function ViewEntryModal({
         </div>
       </div>
     </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RAISED ISSUES PANEL
+// ════════════════════════════════════════════════════════════════════
+const ISSUE_TYPE_META: Record<string, { label: string; text: string; bg: string }> = {
+  bugfix:    { label: "Bug Fix",   text: "text-orange-400", bg: "bg-orange-400/10" },
+  feature:   { label: "Feature",   text: "text-emerald-400", bg: "bg-emerald-400/10" },
+  optimized: { label: "Optimized", text: "text-cyan-400",   bg: "bg-cyan-400/10" },
+  task:      { label: "Task",      text: "text-teal-400",   bg: "bg-teal-400/10" },
+  other:     { label: "Other",     text: "text-slate-400",  bg: "bg-slate-800" },
+};
+
+function RaisedIssuesPanel({
+  open, onClose, issues, entries,
+  projectFilter, onProjectFilterChange,
+  dateFrom, onDateFromChange, dateTo, onDateToChange,
+}: {
+  open: boolean; onClose: () => void;
+  issues: RaisedIssue[]; entries: Entry[];
+  projectFilter: string; onProjectFilterChange: (v: string) => void;
+  dateFrom: string; onDateFromChange: (v: string) => void;
+  dateTo: string; onDateToChange: (v: string) => void;
+}) {
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  const projects = useMemo(() => Array.from(new Set(entries.map((e) => e.project))), [entries]);
+
+  const reportData = useMemo(() => {
+    const scoped = (projectFilter === "all" ? issues : issues.filter(i => i.project === projectFilter));
+    const raised = scoped.filter(i => i.date_raised >= dateFrom && i.date_raised <= dateTo);
+    const resolved = scoped.filter(i => i.status === "resolved" && i.date_resolved && i.date_resolved >= dateFrom && i.date_resolved <= dateTo);
+    const inProg = scoped.filter(i => i.status === "in_progress");
+    const open = scoped.filter(i => i.status === "open");
+    const byType: Record<string, number> = {};
+    const byPriority: Record<string, number> = {};
+    for (const i of raised) {
+      byType[i.type] = (byType[i.type] ?? 0) + 1;
+      byPriority[i.priority] = (byPriority[i.priority] ?? 0) + 1;
+    }
+    return { total: raised.length, resolved: resolved.length, inProgress: inProg.length, open: open.length, byType, byPriority };
+  }, [issues, dateFrom, dateTo, projectFilter]);
+
+  const summaryComment = useMemo(() => {
+    const { total, resolved, inProgress, open, byType } = reportData;
+    if (total === 0) return null;
+
+    const rate = total > 0 ? resolved / total : 0;
+    const topTypeEntry = Object.entries(byType).sort((a, b) => b[1] - a[1])[0];
+    const topTypeLabel = topTypeEntry ? ISSUE_TYPE_META[topTypeEntry[0]]?.label ?? topTypeEntry[0] : null;
+    const typeNote = topTypeLabel && total > 1 ? `, mostly ${topTypeLabel.toLowerCase()} issues` : "";
+
+    const remaining = open + inProgress;
+    const inProgNote = inProgress > 0 ? ` ${inProgress} ${inProgress === 1 ? "is" : "are"} actively being worked on.` : "";
+
+    if (rate === 1) {
+      return `Every one of the ${total} raised issue${total > 1 ? "s" : ""}${typeNote} was resolved. That's a perfect close-out — great discipline from the team.`;
+    }
+    if (rate >= 0.75) {
+      return `${resolved} of ${total} issues resolved${typeNote} — an excellent rate. ${remaining} still open${inProgNote} Keep it up.`;
+    }
+    if (rate >= 0.5) {
+      return `More than half resolved — ${resolved} of ${total}${typeNote}.${inProgNote} The remaining ${remaining} are tracked and on the radar.`;
+    }
+    if (rate >= 0.25) {
+      return `${resolved} of ${total} issues closed so far${typeNote}.${inProgNote} Good progress — the team has visibility and ${remaining > 1 ? "those" : "that"} ${remaining} remaining ${remaining === 1 ? "issue is" : "issues are"} within reach.`;
+    }
+    if (resolved > 0) {
+      return `${resolved} issue${resolved > 1 ? "s" : ""} resolved out of ${total} raised${typeNote}. Every fix is a step forward —${inProgNote ? "" : " keep the momentum going."} ${inProgNote}`;
+    }
+    return `${total} issue${total > 1 ? "s" : ""} raised${typeNote} with resolution work ahead.${inProgNote ? "" : " The team has full visibility — that's the first step."} ${inProgNote}`;
+  }, [reportData]);
+
+  return (
+    <>
+      <div onClick={onClose} className={`fixed inset-0 z-30 bg-slate-950/60 backdrop-blur-sm transition-opacity ${open ? "opacity-100" : "opacity-0 pointer-events-none"}`} />
+      <div className={`fixed z-40 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100%-2rem)] max-w-2xl max-h-[88vh] flex flex-col rounded-2xl border border-red-900/40 bg-slate-900/95 backdrop-blur-md shadow-2xl shadow-black/40 transition-all duration-300 ${open ? "opacity-100 scale-100" : "opacity-0 scale-95 pointer-events-none"}`}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-2">
+            <BarChart2 size={14} className="text-red-400" />
+            <span className="text-xs font-bold tracking-[0.25em] uppercase text-red-400">Issues Report</span>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors"><X size={16} /></button>
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-800/60 shrink-0 flex-wrap">
+          <select value={projectFilter} onChange={(e) => onProjectFilterChange(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2.5 py-1.5 outline-none">
+            <option value="all">All Projects</option>
+            {projects.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <div className="flex items-center gap-1.5 ml-auto">
+            <input type="date" value={dateFrom} onChange={e => onDateFromChange(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2.5 py-1.5 outline-none" />
+            <span className="text-slate-600 text-xs">→</span>
+            <input type="date" value={dateTo} onChange={e => onDateToChange(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2.5 py-1.5 outline-none" />
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+          <p className="text-xs text-slate-500">{dateFrom} → {dateTo} · {projectFilter === "all" ? "All Projects" : projectFilter}</p>
+
+          {/* Status summary cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3 flex flex-col gap-1">
+              <span className="text-2xl font-serif text-slate-50">{reportData.total}</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500">Raised</span>
+            </div>
+            <div className="rounded-xl border border-red-400/20 bg-red-400/5 px-4 py-3 flex flex-col gap-1">
+              <span className="text-2xl font-serif text-red-300">{reportData.open}</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500">Open</span>
+            </div>
+            <div className="rounded-xl border border-yellow-400/20 bg-yellow-400/5 px-4 py-3 flex flex-col gap-1">
+              <span className="text-2xl font-serif text-yellow-300">{reportData.inProgress}</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500">In Progress</span>
+            </div>
+            <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3 flex flex-col gap-1">
+              <span className="text-2xl font-serif text-emerald-300">{reportData.resolved}</span>
+              <span className="text-[10px] uppercase tracking-widest text-slate-500">Resolved</span>
+            </div>
+          </div>
+
+          {summaryComment && (
+            <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 px-4 py-3">
+              <p className="text-xs text-slate-300 leading-relaxed">{summaryComment}</p>
+            </div>
+          )}
+
+          {reportData.total > 0 ? (
+            <>
+              {/* By type */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 flex flex-col gap-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">By Type</p>
+                {Object.entries(ISSUE_TYPE_META).map(([key, meta]) => {
+                  const count = reportData.byType[key] ?? 0;
+                  if (count === 0) return null;
+                  const pct = Math.round((count / reportData.total) * 100);
+                  return (
+                    <div key={key} className="flex items-center gap-3">
+                      <span className={`text-[11px] font-semibold w-20 shrink-0 ${meta.text}`}>{meta.label}</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                        <div className={`h-full rounded-full ${meta.bg.replace("/10", "")}`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs text-slate-400 w-8 text-right">{count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* By priority */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 flex flex-col gap-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">By Priority</p>
+                {(["urgent", "major", "minor"] as const).map((p) => {
+                  const count = reportData.byPriority[p] ?? 0;
+                  if (count === 0) return null;
+                  const meta = PRIORITY_META[p];
+                  const pct = Math.round((count / reportData.total) * 100);
+                  return (
+                    <div key={p} className="flex items-center gap-3">
+                      <span className={`text-[11px] font-semibold w-20 shrink-0 ${meta.text}`}>{meta.label}</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                        <div className={`h-full rounded-full ${meta.bg.replace("/10","")}`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-xs text-slate-400 w-8 text-right">{count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-slate-600 text-center py-6">No issues raised in this date range.</p>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Draft types local to IssueDetailModal ────────────────────────────
+type IssueMediaDraft = { file: File | null; preview: string; caption: string };
+type IssueCompareDraft = {
+  label: string;
+  before: { file: File | null; preview: string; note: string };
+  after:  { file: File | null; preview: string; note: string };
+};
+
+function IssueDetailModal({
+  issue, readOnly, onClose, onSaved,
+}: {
+  issue: RaisedIssue;
+  readOnly: boolean;
+  onClose: () => void;
+  onSaved: (updated: RaisedIssue) => void;
+}) {
+  const [mediaDrafts, setMediaDrafts] = useState<IssueMediaDraft[]>(() =>
+    (issue.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" }))
+  );
+  const [compareDrafts, setCompareDrafts] = useState<IssueCompareDraft[]>(() =>
+    (issue.compare ?? []).map(c => ({
+      label: c.label ?? "",
+      before: { file: null, preview: c.before.src, note: c.before.note },
+      after:  { file: null, preview: c.after.src,  note: c.after.note  },
+    }))
+  );
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  function addMedia(file: File) {
+    const preview = URL.createObjectURL(file);
+    setMediaDrafts(d => [...d, { file, preview, caption: "" }]);
+  }
+
+  function addCompare() {
+    setCompareDrafts(d => [...d, {
+      label: "",
+      before: { file: null, preview: "", note: "" },
+      after:  { file: null, preview: "", note: "" },
+    }]);
+  }
+
+  async function handleSave() {
+    setSaving(true); setErr(null);
+    try {
+      const media: EntryMedia[] = await Promise.all(
+        mediaDrafts.map(async (m) => ({
+          kind: "image" as const,
+          src: m.file ? await uploadFile(m.file) : m.preview,
+          caption: m.caption || undefined,
+        }))
+      );
+      const compare: CompareItem[] = await Promise.all(
+        compareDrafts.map(async (c) => ({
+          label: c.label || undefined,
+          before: { src: c.before.file ? await uploadFile(c.before.file) : c.before.preview, note: c.before.note },
+          after:  { src: c.after.file  ? await uploadFile(c.after.file)  : c.after.preview,  note: c.after.note  },
+        }))
+      );
+      const patch = { media, compare };
+      const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+      if (error) { setErr(error.message); return; }
+      onSaved({ ...issue, ...patch });
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const typeMeta = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+  const priorityMeta = PRIORITY_META[issue.priority];
+
+  return (
+    <>
+      <div onClick={onClose} className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm" />
+      <div className="fixed z-60 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100%-2rem)] max-w-xl max-h-[90vh] flex flex-col rounded-2xl border border-slate-700 bg-slate-900/98 shadow-2xl">
+
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800 shrink-0">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${typeMeta.text} ${typeMeta.bg}`}>{typeMeta.label}</span>
+              {priorityMeta && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${priorityMeta.text} ${priorityMeta.bg}`}>{priorityMeta.label}</span>}
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
+            </div>
+            <p className="text-sm font-semibold text-slate-100 leading-snug">{issue.title}</p>
+            {issue.description && <p className="text-xs text-slate-500 mt-0.5">{issue.description}</p>}
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition-colors shrink-0 mt-0.5"><X size={16} /></button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5">
+
+          {/* Images section */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Images</p>
+              {!readOnly && (
+                <label className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-emerald-400 transition-colors cursor-pointer">
+                  <input type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && addMedia(e.target.files[0])} />
+                  <Plus size={11} /> Add image
+                </label>
+              )}
+            </div>
+            {mediaDrafts.length === 0 ? (
+              <p className="text-xs text-slate-700 py-2">No images yet.</p>
+            ) : (
+              <div className={`grid gap-2 ${mediaDrafts.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                {mediaDrafts.map((m, i) => (
+                  <div key={i} className="relative group rounded-lg overflow-hidden border border-slate-800">
+                    <img src={m.preview} alt="" className="w-full h-36 object-cover" />
+                    <div className="absolute inset-x-0 bottom-0 bg-slate-900/80 px-2 py-1 flex items-center gap-1">
+                      <input
+                        value={m.caption}
+                        onChange={e => setMediaDrafts(d => d.map((x, j) => j === i ? { ...x, caption: e.target.value } : x))}
+                        placeholder="Caption…"
+                        className="flex-1 bg-transparent text-[11px] text-slate-300 outline-none placeholder:text-slate-600"
+                        readOnly={readOnly}
+                      />
+                      {!readOnly && (
+                        <button onClick={() => setMediaDrafts(d => d.filter((_, j) => j !== i))} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={11} /></button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Before / After section */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Before / After</p>
+              {!readOnly && (
+                <button onClick={addCompare} className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-emerald-400 transition-colors">
+                  <Plus size={11} /> Add comparison
+                </button>
+              )}
+            </div>
+            {compareDrafts.length === 0 ? (
+              <p className="text-xs text-slate-700 py-2">No comparisons yet.</p>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {compareDrafts.map((c, i) => (
+                  <div key={i} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={c.label}
+                        onChange={e => setCompareDrafts(d => d.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
+                        placeholder="Label (optional)"
+                        className="flex-1 rounded bg-transparent border-b border-slate-800 text-[11px] text-slate-300 outline-none py-0.5 placeholder:text-slate-700"
+                        readOnly={readOnly}
+                      />
+                      {!readOnly && (
+                        <button onClick={() => setCompareDrafts(d => d.filter((_, j) => j !== i))} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={12} /></button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(["before", "after"] as const).map(side => {
+                        const slot = c[side];
+                        return (
+                          <div key={side} className="flex flex-col gap-1">
+                            <p className="text-[9px] uppercase tracking-widest text-slate-600 font-bold">{side}</p>
+                            {slot.preview ? (
+                              <div className="relative group rounded-lg overflow-hidden border border-slate-800">
+                                <img src={slot.preview} alt={side} className="w-full h-24 object-cover" />
+                                {!readOnly && (
+                                  <label className="absolute inset-0 flex items-center justify-center bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                    <input type="file" accept="image/*" className="hidden" onChange={e => {
+                                      const f = e.target.files?.[0]; if (!f) return;
+                                      const preview = URL.createObjectURL(f);
+                                      setCompareDrafts(d => d.map((x, j) => j === i ? { ...x, [side]: { ...x[side], file: f, preview } } : x));
+                                    }} />
+                                    <ImageIcon size={16} className="text-slate-300" />
+                                  </label>
+                                )}
+                              </div>
+                            ) : !readOnly ? (
+                              <label className="flex flex-col items-center justify-center h-24 rounded-lg border border-dashed border-slate-700 text-slate-600 hover:border-emerald-700/50 hover:text-emerald-400 transition-colors cursor-pointer">
+                                <input type="file" accept="image/*" className="hidden" onChange={e => {
+                                  const f = e.target.files?.[0]; if (!f) return;
+                                  const preview = URL.createObjectURL(f);
+                                  setCompareDrafts(d => d.map((x, j) => j === i ? { ...x, [side]: { ...x[side], file: f, preview } } : x));
+                                }} />
+                                <ImageIcon size={16} /><span className="text-[10px] mt-1">Upload</span>
+                              </label>
+                            ) : (
+                              <div className="h-24 rounded-lg border border-dashed border-slate-800 flex items-center justify-center text-xs text-slate-700">No image</div>
+                            )}
+                            <input
+                              value={slot.note}
+                              onChange={e => setCompareDrafts(d => d.map((x, j) => j === i ? { ...x, [side]: { ...x[side], note: e.target.value } } : x))}
+                              placeholder="Note…"
+                              className="text-[11px] text-slate-400 bg-transparent border-b border-slate-800/60 outline-none py-0.5 placeholder:text-slate-700"
+                              readOnly={readOnly}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {err && <p className="text-xs text-red-400">{err}</p>}
+        </div>
+
+        {/* Footer */}
+        {!readOnly && (
+          <div className="px-5 py-3 border-t border-slate-800 shrink-0">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="w-full rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-sm font-semibold py-2.5 hover:bg-emerald-400/20 transition-colors disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle }: {
+  issue: RaisedIssue;
+  readOnly: boolean;
+  onEdit: (i: RaisedIssue) => void;
+  onDelete: (i: RaisedIssue) => void;
+  onStart: (i: RaisedIssue) => void;
+  onToggle: (i: RaisedIssue) => void;
+}) {
+  const typeMeta = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+  const priorityMeta = PRIORITY_META[issue.priority];
+  const resolved = issue.status === "resolved";
+  const inProgress = issue.status === "in_progress";
+  return (
+    <div className={`rounded-xl border px-4 py-3 flex flex-col gap-2 transition-colors ${resolved ? "border-slate-800/40 bg-slate-950/20 opacity-60" : inProgress ? "border-yellow-400/20 bg-yellow-400/5" : "border-slate-800 bg-slate-900/60"}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-medium leading-snug ${resolved ? "line-through text-slate-500" : "text-slate-100"}`}>{issue.title}</p>
+          {issue.description && <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>}
+        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-1 shrink-0">
+            {issue.status === "open" && (
+              <button onClick={() => onStart(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-yellow-700/40 text-yellow-400 hover:bg-yellow-400/10 transition-colors">
+                ▶ Start
+              </button>
+            )}
+            {!inProgress && (
+              <button onClick={() => onToggle(issue)} title={resolved ? "Reopen" : "Mark resolved"} className={`text-[10px] px-2 py-1 rounded-lg border transition-colors ${resolved ? "border-slate-700 text-slate-500 hover:text-emerald-400 hover:border-emerald-700/40" : "border-emerald-700/40 text-emerald-400 hover:bg-emerald-400/10"}`}>
+                {resolved ? "Reopen" : "✓ Resolve"}
+              </button>
+            )}
+            <button onClick={() => onEdit(issue)} className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"><Pencil size={12} /></button>
+            <button onClick={() => onDelete(issue)} className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"><Trash2 size={12} /></button>
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${typeMeta.text} ${typeMeta.bg}`}>{typeMeta.label}</span>
+        {priorityMeta && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${priorityMeta.text} ${priorityMeta.bg}`}>{priorityMeta.label}</span>}
+        {inProgress && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>}
+        <span className="text-[9px] text-slate-600 font-mono ml-auto">{issue.date_raised}</span>
+        {inProgress && issue.date_started && <span className="text-[9px] text-yellow-600 font-mono">started {issue.date_started}</span>}
+        {resolved && issue.date_resolved && <span className="text-[9px] text-emerald-600 font-mono">resolved {issue.date_resolved}</span>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Grouped Issue Card — raised issues for the same date, one card
+// ════════════════════════════════════════════════════════════════════
+function GroupedIssueCard({
+  date, issues, readOnly, delay, onView, onResolve,
+}: {
+  date: string;
+  issues: RaisedIssue[];
+  readOnly: boolean;
+  delay?: number;
+  onView: (issue: RaisedIssue) => void;
+  onResolve: (issue: RaisedIssue) => void;
+}) {
+  const allResolved = issues.every(i => i.status === "resolved");
+  const borderAccent = allResolved ? "border-l-emerald-500/60" : "border-l-red-500/60";
+  return (
+    <article
+      className={`flex flex-col rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm overflow-hidden animate-fade-in-up border-l-4 ${borderAccent}`}
+      style={{ animationDelay: `${delay ?? 0}ms` }}
+    >
+      <div className="px-4 pt-4 sm:px-5 sm:pt-5 pb-3 border-b border-slate-800/60 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[10px] tracking-widest uppercase text-slate-400">
+          <Folder size={12} /> {issues[0].project}
+        </span>
+        <span className="text-[10px] font-mono text-slate-500">{date}</span>
+      </div>
+      <div className="px-4 sm:px-5 pt-3 pb-3 flex flex-col gap-3">
+        <p className="text-[9px] font-bold uppercase tracking-widest text-red-400/60">Raised Issues</p>
+        {issues.map(issue => {
+          const resolved = issue.status === "resolved";
+          const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+          const pm = PRIORITY_META[issue.priority];
+          const hasMedia = (issue.media?.length ?? 0) + (issue.compare?.length ?? 0) > 0;
+          return (
+            <div key={issue.id} className={`flex items-start gap-2.5 pl-2.5 border-l-2 ${resolved ? "border-emerald-500/40" : "border-red-500/50"}`}>
+              <div className="flex-1 min-w-0">
+                <button onClick={() => onView(issue)} className="text-xs text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors">
+                  {issue.title}
+                </button>
+                {issue.description && (
+                  <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>
+                )}
+                <div className="flex flex-wrap items-center gap-1 mt-1">
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                  {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                  {resolved
+                    ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-emerald-400 bg-emerald-400/10">Resolved</span>
+                    : <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>
+                  }
+                  {hasMedia && <span className="text-[9px] text-slate-500 flex items-center gap-0.5"><ImageIcon size={9} /> media</span>}
+                </div>
+              </div>
+              {!readOnly && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => onView(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors">
+                    + Media
+                  </button>
+                  <button
+                    onClick={() => onResolve(issue)}
+                    className={`text-[10px] px-2 py-1 rounded-lg border transition-colors ${
+                      resolved
+                        ? "border-slate-700 text-slate-500 hover:text-yellow-400 hover:border-yellow-700/40"
+                        : "border-emerald-700/40 text-emerald-300 hover:bg-emerald-400/10"
+                    }`}
+                  >
+                    {resolved ? "Reopen" : "✓ Resolve"}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </article>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// COMPLETED PANEL
+// ════════════════════════════════════════════════════════════════════
+type DoneTask = Task & { date: string; project: string; entryTitle: string };
+
+function CompletedPanel({
+  open, onClose, entries, issues,
+}: {
+  open: boolean;
+  onClose: () => void;
+  entries: Entry[];
+  issues: RaisedIssue[];
+}) {
+  const [dateRange, setDateRange] = useState<"week" | "month" | "all" | "custom">("week");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [projectFilter, setProjectFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  const projects = useMemo(() => Array.from(new Set(entries.map(e => e.project))), [entries]);
+
+  const { from, to } = useMemo(() => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    if (dateRange === "week") {
+      const d = new Date(now); d.setDate(d.getDate() - 6);
+      return { from: d.toISOString().slice(0, 10), to: today };
+    }
+    if (dateRange === "month") {
+      return { from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10), to: today };
+    }
+    if (dateRange === "custom") return { from: customFrom, to: customTo };
+    return { from: "", to: "" };
+  }, [dateRange, customFrom, customTo]);
+
+  const allDoneTasks = useMemo<DoneTask[]>(() =>
+    entries.flatMap(e =>
+      e.tasks.filter(t => t.status === "done").map(t => ({ ...t, date: e.date, project: e.project, entryTitle: e.title }))
+    ).sort((a, b) => b.date.localeCompare(a.date)),
+  [entries]);
+
+  const resolvedIssues = useMemo(() => [...issues.filter(i => i.status === "resolved")].sort((a, b) => (b.date_resolved ?? b.date_raised).localeCompare(a.date_resolved ?? a.date_raised)), [issues]);
+
+  const filteredDone = useMemo(() => allDoneTasks.filter(t => {
+    if (projectFilter !== "all" && t.project !== projectFilter) return false;
+    if (typeFilter !== "all" && typeFilter !== "issues" && (t.type ?? "task") !== typeFilter) return false;
+    if (typeFilter === "issues") return false;
+    if (from && t.date < from) return false;
+    if (to && t.date > to) return false;
+    return true;
+  }), [allDoneTasks, projectFilter, typeFilter, from, to]);
+
+  const filteredResolved = useMemo(() => resolvedIssues.filter(i => {
+    if (projectFilter !== "all" && i.project !== projectFilter) return false;
+    if (typeFilter !== "all" && typeFilter !== "issues" && i.type !== typeFilter) return false;
+    const d = i.date_resolved ?? i.date_raised;
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  }), [resolvedIssues, projectFilter, typeFilter, from, to]);
+
+  const motivation = useMemo(() => {
+    const total = filteredDone.length + filteredResolved.length;
+    const bugs = filteredDone.filter(t => t.type === "bugfix").length + filteredResolved.length;
+    const features = filteredDone.filter(t => t.type === "feature").length;
+    const optimized = filteredDone.filter(t => t.type === "optimized").length;
+    const period = dateRange === "week" ? "this week" : dateRange === "month" ? "this month" : "in total";
+
+    if (total === 0) return { emoji: "💭", headline: "Nothing here yet...", sub: "No completed work in this range. Time to ship something great!", color: "from-slate-800/60 to-slate-900/60 border-slate-700/40" };
+    if (bugs > 20) return { emoji: "🔥", headline: "Absolute bug terminator!", sub: `You crushed ${bugs} bugs ${period}. The codebase has never been cleaner.`, color: "from-orange-900/40 to-red-900/30 border-orange-700/30" };
+    if (features > 15) return { emoji: "🚀", headline: "Feature factory mode!", sub: `${features} features shipped ${period}. Users are going to love every single one.`, color: "from-emerald-900/40 to-teal-900/30 border-emerald-700/30" };
+    if (total > 30) return { emoji: "⚡", headline: "Absolutely legendary!", sub: `${total} tasks completed ${period}. You're operating on another level.`, color: "from-yellow-900/30 to-amber-900/20 border-yellow-700/30" };
+    if (optimized > 8) return { emoji: "🎯", headline: "Performance wizard!", sub: `${optimized} optimizations ${period}. The app is running like a dream.`, color: "from-cyan-900/40 to-blue-900/30 border-cyan-700/30" };
+    if (filteredResolved.length > 8) return { emoji: "🛡️", headline: "Issue slayer!", sub: `${filteredResolved.length} raised issues resolved ${period}. Rock-solid reliability.`, color: "from-violet-900/40 to-purple-900/30 border-violet-700/30" };
+    if (total > 20) return { emoji: "💪", headline: "Crushing it!", sub: `${total} tasks done ${period}. That's serious momentum — keep it going.`, color: "from-emerald-900/30 to-teal-900/20 border-emerald-700/30" };
+    if (features > 5) return { emoji: "✨", headline: "Shipping great things!", sub: `${features} features out the door ${period}. Quality work, every time.`, color: "from-emerald-900/30 to-slate-900/20 border-emerald-700/30" };
+    if (bugs > 5) return { emoji: "🐛", headline: "Bug hunter on the loose!", sub: `${bugs} bugs squashed ${period}. Each fix makes the product better.`, color: "from-orange-900/30 to-slate-900/20 border-orange-700/30" };
+    if (total > 10) return { emoji: "📈", headline: "On a great roll!", sub: `${total} tasks wrapped up ${period}. Steady progress wins the race.`, color: "from-blue-900/30 to-slate-900/20 border-blue-700/30" };
+    if (total > 5) return { emoji: "✅", headline: "Solid progress!", sub: `${total} tasks done ${period}. Every task shipped is a step forward.`, color: "from-teal-900/30 to-slate-900/20 border-teal-700/30" };
+    return { emoji: "🌱", headline: "Getting things done!", sub: `${total} task${total > 1 ? "s" : ""} completed ${period}. Great start — keep building!`, color: "from-slate-800/60 to-slate-900/40 border-slate-700/40" };
+  }, [filteredDone, filteredResolved, dateRange]);
+
+  const TYPE_FILTERS = [
+    { key: "all", label: "All" },
+    { key: "feature", label: "Features" },
+    { key: "bugfix", label: "Bug Fixes" },
+    { key: "task", label: "Tasks" },
+    { key: "optimized", label: "Optimized" },
+    { key: "refactor", label: "Refactors" },
+    { key: "milestone", label: "Milestones" },
+    { key: "issues", label: "Raised Issues" },
+  ];
+
+  const RANGE_BTNS = [
+    { key: "week", label: "This Week" },
+    { key: "month", label: "This Month" },
+    { key: "all", label: "All Time" },
+    { key: "custom", label: "Custom" },
+  ] as const;
+
+  if (!open) return null;
+
+  const totalFiltered = filteredDone.length + filteredResolved.length;
+  const bugCount = filteredDone.filter(t => t.type === "bugfix").length + filteredResolved.length;
+  const featureCount = filteredDone.filter(t => t.type === "feature").length;
+  const showTasks = typeFilter !== "issues";
+  const showIssues = typeFilter === "all" || typeFilter === "issues";
+
+  return (
+    <>
+      <div onClick={onClose} className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" />
+      <div className="fixed inset-0 z-55 flex flex-col bg-slate-950 overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 sm:px-8 py-4 border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 size={18} className="text-emerald-400" />
+            <div>
+              <h2 className="text-sm font-bold tracking-widest uppercase text-emerald-300">Completed Work</h2>
+              <p className="text-[11px] text-slate-500 mt-0.5">{totalFiltered} item{totalFiltered !== 1 ? "s" : ""} in this view</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 sm:px-8 py-6 flex flex-col gap-6">
+          {/* Motivational card */}
+          <div className={`rounded-2xl border bg-gradient-to-br ${motivation.color} px-5 py-4 flex items-start gap-4`}>
+            <span className="text-3xl mt-0.5 shrink-0">{motivation.emoji}</span>
+            <div>
+              <p className="text-base font-bold text-slate-100 leading-snug">{motivation.headline}</p>
+              <p className="text-sm text-slate-400 mt-1 leading-relaxed">{motivation.sub}</p>
+            </div>
+            <Sparkles size={16} className="ml-auto shrink-0 text-slate-600 mt-1" />
+          </div>
+
+          {/* Stats row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: "Total Done", value: totalFiltered, color: "text-emerald-400", bg: "border-emerald-700/30 bg-emerald-400/5" },
+              { label: "Resolved Issues", value: filteredResolved.length, color: "text-violet-400", bg: "border-violet-700/30 bg-violet-400/5" },
+              { label: "Bug Fixes", value: bugCount, color: "text-orange-400", bg: "border-orange-700/30 bg-orange-400/5" },
+              { label: "Features", value: featureCount, color: "text-teal-400", bg: "border-teal-700/30 bg-teal-400/5" },
+            ].map(s => (
+              <div key={s.label} className={`rounded-xl border ${s.bg} px-4 py-3 flex flex-col gap-1`}>
+                <span className={`text-2xl font-bold font-mono ${s.color}`}>{s.value}</span>
+                <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{s.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-col gap-3">
+            {/* Quick range chips */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <Filter size={12} className="text-slate-600 shrink-0" />
+              {RANGE_BTNS.map(r => (
+                <button
+                  key={r.key}
+                  onClick={() => setDateRange(r.key)}
+                  className={`text-[11px] px-3 py-1.5 rounded-lg border font-medium transition-colors ${dateRange === r.key ? "bg-emerald-400/15 border-emerald-700/40 text-emerald-300" : "border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600"}`}
+                >
+                  {r.label}
+                </button>
+              ))}
+              {dateRange === "custom" && (
+                <div className="flex items-center gap-2 ml-1">
+                  <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
+                    className="text-[11px] bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-300 focus:outline-none focus:border-emerald-700" />
+                  <span className="text-slate-600 text-xs">→</span>
+                  <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
+                    className="text-[11px] bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-300 focus:outline-none focus:border-emerald-700" />
+                </div>
+              )}
+            </div>
+            {/* Project + Type filters */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <select value={projectFilter} onChange={e => setProjectFilter(e.target.value)}
+                className="text-[11px] bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-300 focus:outline-none focus:border-emerald-700">
+                <option value="all">All Projects</option>
+                {projects.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {TYPE_FILTERS.map(f => (
+                  <button
+                    key={f.key}
+                    onClick={() => setTypeFilter(f.key)}
+                    className={`text-[11px] px-2.5 py-1 rounded-lg border font-medium transition-colors ${typeFilter === f.key ? "bg-slate-700 border-slate-500 text-slate-100" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Completed Tasks */}
+          {showTasks && filteredDone.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+                <CheckCircle2 size={11} className="text-emerald-500" /> Completed Tasks
+                <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold">{filteredDone.length}</span>
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {filteredDone.map((task, i) => {
+                  const typeKey = (task.type ?? "task") as keyof typeof TYPE_META;
+                  const meta = TYPE_META[typeKey] ?? TYPE_META.task;
+                  const Icon = meta.icon;
+                  const pm = task.priority ? PRIORITY_META[task.priority] : null;
+                  return (
+                    <div key={i} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 transition-colors">
+                      <span className={`mt-0.5 shrink-0 ${meta.text}`}><Icon size={13} /></span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-slate-200 leading-snug">{task.title}</p>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                          <span className="text-[10px] font-mono text-slate-600">{task.date}</span>
+                          <span className="text-slate-700">·</span>
+                          <span className="text-[10px] text-slate-500">{task.project}</span>
+                          {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                          {task.complexity && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[task.complexity].text} ${COMPLEXITY_META[task.complexity].bg}`}>{COMPLEXITY_META[task.complexity].label}</span>}
+                          {task.tags?.map(tag => <span key={tag} className="text-[9px] text-slate-500 border border-slate-800 rounded-md px-1.5 py-0.5">#{tag}</span>)}
+                        </div>
+                      </div>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0 ${meta.text} ${meta.bg}`}>{meta.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Resolved Raised Issues */}
+          {showIssues && filteredResolved.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+                <AlertCircle size={11} className="text-violet-400" /> Resolved Issues
+                <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-bold">{filteredResolved.length}</span>
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {filteredResolved.map(issue => {
+                  const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+                  const pm = PRIORITY_META[issue.priority];
+                  const days = issue.date_started && issue.date_resolved
+                    ? Math.max(0, Math.round((new Date(issue.date_resolved).getTime() - new Date(issue.date_started).getTime()) / 86400000))
+                    : null;
+                  return (
+                    <div key={issue.id} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-slate-900/60 border border-emerald-900/20 hover:border-emerald-800/40 transition-colors">
+                      <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-emerald-500" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-slate-200 leading-snug">{issue.title}</p>
+                        {issue.description && <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                          <span className="text-[10px] font-mono text-slate-600">{issue.date_resolved ?? issue.date_raised}</span>
+                          <span className="text-slate-700">·</span>
+                          <span className="text-[10px] text-slate-500">{issue.project}</span>
+                          {days !== null && <span className="text-[10px] text-slate-600">resolved in {days}d</span>}
+                          {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                        </div>
+                      </div>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0 ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {totalFiltered === 0 && (
+            <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
+              <TrendingUp size={32} className="text-slate-700" />
+              <p className="text-slate-400 font-medium">Nothing completed in this range</p>
+              <p className="text-slate-600 text-sm">Try a wider date range or different filters</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Completion Toast — pops up when a task is done or issue resolved
+// ════════════════════════════════════════════════════════════════════
+function CompletionToast({
+  toast,
+  onClose,
+}: {
+  toast: { headline: string; sub: string; verse: string; ref: string } | null;
+  onClose: () => void;
+}) {
+  if (!toast) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-200 w-80 animate-fade-in-up pointer-events-auto">
+      <div className="rounded-2xl border border-emerald-700/40 bg-slate-900 shadow-2xl shadow-black/60 overflow-hidden">
+        <div className="bg-emerald-400/10 px-4 py-3 flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-emerald-300 leading-snug">{toast.headline}</p>
+            <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{toast.sub}</p>
+          </div>
+          <button onClick={onClose} className="shrink-0 mt-0.5 p-1 rounded text-slate-600 hover:text-slate-300 transition-colors">
+            <X size={13} />
+          </button>
+        </div>
+        <div className="px-4 py-3 border-t border-slate-800 bg-slate-950/40">
+          <p className="text-[11px] text-slate-400 italic leading-relaxed">"{toast.verse}"</p>
+          <p className="text-[10px] text-emerald-500/70 mt-1.5 font-semibold tracking-wide">— {toast.ref}</p>
+        </div>
+        <div className="h-0.5 bg-slate-800 overflow-hidden">
+          <div className="h-full w-full bg-emerald-500/50 origin-left" style={{ animation: "drainWidth 7s linear forwards" }} />
+        </div>
+      </div>
+    </div>
   );
 }
