@@ -25,6 +25,25 @@ export type Task = {
   sortOrder?: number;
   compare?: CompareItem[];
   media?: EntryMedia[];
+  featureId?: string;
+};
+
+// Supabase table: features
+// Run this SQL in your Supabase dashboard:
+//   CREATE TABLE features (
+//     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+//     name text NOT NULL,
+//     color text DEFAULT '#6366f1',
+//     description text,
+//     created_at timestamptz DEFAULT now()
+//   );
+//   ALTER TABLE features ENABLE ROW LEVEL SECURITY;
+//   CREATE POLICY "Allow all" ON features FOR ALL USING (true);
+export type Feature = {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
 };
 
 export type Entry = {

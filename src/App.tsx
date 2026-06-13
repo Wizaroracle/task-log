@@ -34,7 +34,7 @@ import {
   GitCommitHorizontal,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
-import type { CompareItem, Entry, EntryMedia, RaisedIssue, Task } from "./utils/entries/entries";
+import type { CompareItem, Entry, EntryMedia, Feature, RaisedIssue, Task } from "./utils/entries/entries";
 import { supabase } from "./utils/supabase";
 import { uploadFile } from "./utils/upload";
 import { AddEntryModal, type InProgressItem } from "./components/AddEntryModal";
@@ -47,36 +47,36 @@ const TYPE_META = {
     label: "Feature",
     icon: ArrowUpNarrowWide,
     text: "text-emerald-400",
-    bg: "bg-emerald-400/10",
+    bg: "bg-emerald-400/12",
     ring: "ring-emerald-400/20",
   },
   bugfix: {
     label: "Bug Fix",
     icon: Bug,
     text: "text-orange-400",
-    bg: "bg-orange-400/10",
+    bg: "bg-orange-400/12",
     ring: "ring-orange-400/20",
   },
   task: {
     label: "Task",
     icon: CheckCircle2,
-    text: "text-teal-400",
-    bg: "bg-teal-400/10",
-    ring: "ring-teal-400/20",
+    text: "text-teal-300",
+    bg: "bg-teal-300/10",
+    ring: "ring-teal-300/20",
   },
   milestone: {
     label: "Milestone",
     icon: ArrowRight,
-    text: "text-yellow-400",
-    bg: "bg-yellow-400/10",
-    ring: "ring-yellow-400/20",
+    text: "text-amber-400",
+    bg: "bg-amber-400/10",
+    ring: "ring-amber-400/20",
   },
   learning: {
     label: "Learning",
     icon: BookOpen,
-    text: "text-violet-400",
-    bg: "bg-violet-400/10",
-    ring: "ring-violet-400/20",
+    text: "text-indigo-400",
+    bg: "bg-indigo-400/10",
+    ring: "ring-indigo-400/20",
   },
   optimized: {
     label: "Optimized",
@@ -88,9 +88,9 @@ const TYPE_META = {
   refactor: {
     label: "Refactor",
     icon: RefreshCw,
-    text: "text-purple-400",
-    bg: "bg-purple-400/10",
-    ring: "ring-purple-400/20",
+    text: "text-fuchsia-400",
+    bg: "bg-fuchsia-400/10",
+    ring: "ring-fuchsia-400/20",
   },
 };
 
@@ -118,13 +118,13 @@ const PRIORITY_META = {
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
 
 const TYPE_COLORS: Record<string, string> = {
-  feature: "#34d399",
-  bugfix: "#fb923c",
-  task: "#2dd4bf",
-  milestone: "#facc15",
-  learning: "#a78bfa",
-  optimized: "#22d3ee",
-  refactor: "#c084fc",
+  feature:   "#34d399", // emerald-400
+  bugfix:    "#fb923c", // orange-400
+  task:      "#5eead4", // teal-300
+  milestone: "#fbbf24", // amber-400
+  learning:  "#818cf8", // indigo-400
+  optimized: "#22d3ee", // cyan-400
+  refactor:  "#e879f9", // fuchsia-400
 };
 
 const COMPLEXITY_META = {
@@ -167,6 +167,17 @@ const TASK_STATUS_DOT: Record<string, string> = {
   progress: "bg-yellow-400",
   planned: "bg-slate-600",
 };
+
+const FEATURE_PRESET_COLORS = [
+  "#f97316", // orange  — Food Ordering
+  "#6366f1", // indigo  — default
+  "#10b981", // emerald
+  "#3b82f6", // blue
+  "#8b5cf6", // purple
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#f59e0b", // amber
+];
 
 const STATUS_META = {
   done: { label: "Done", dot: "bg-emerald-400" },
@@ -281,6 +292,18 @@ export default function ProjectDashboard() {
   // Stats + heatmap collapse
   const [statsOpen, setStatsOpen] = useState(true);
   const [heatmapOpen, setHeatmapOpen] = useState(true);
+  const [featureProgressOpen, setFeatureProgressOpen] = useState(false);
+
+  // Features (epics)
+  const [features, setFeatures] = useState<Feature[]>([]);
+  const [_featuresLoading, setFeaturesLoading] = useState(false);
+  const [featureTabFilter, setFeatureTabFilter] = useState<string>("all");
+  const [createFeatureOpen, setCreateFeatureOpen] = useState(false);
+  const [createFeatureForm, setCreateFeatureForm] = useState({ name: "", color: FEATURE_PRESET_COLORS[0], description: "" });
+  const [createFeatureSaving, setCreateFeatureSaving] = useState(false);
+  const [quickAddFeatureId, setQuickAddFeatureId] = useState<string | null>(null);
+  const [backlogEditFeatureId, setBacklogEditFeatureId] = useState<string | null>(null);
+  const [confirmDeleteFeatureId, setConfirmDeleteFeatureId] = useState<string | null>(null);
 
   // Completion toasts — stacked array, newest first
   const [toasts, setToasts] = useState<Array<{ id: string; headline: string; sub: string; verse: string; ref: string }>>([]);
@@ -376,6 +399,40 @@ export default function ProjectDashboard() {
       setWizardInput("");
     }
   };
+
+  // ── Features (Epics) CRUD ───────────────────────────────────────
+  async function loadFeatures() {
+    setFeaturesLoading(true);
+    const { data, error } = await supabase.from("features").select("*").order("created_at", { ascending: true });
+    if (!error && data) setFeatures(data as Feature[]);
+    setFeaturesLoading(false);
+  }
+
+  async function createFeature() {
+    if (!createFeatureForm.name.trim()) return;
+    setCreateFeatureSaving(true);
+    const payload: Omit<Feature, "id"> = {
+      name: createFeatureForm.name.trim(),
+      color: createFeatureForm.color,
+      ...(createFeatureForm.description.trim() ? { description: createFeatureForm.description.trim() } : {}),
+    };
+    const { data, error } = await supabase.from("features").insert(payload).select().single();
+    if (!error && data) {
+      setFeatures(prev => [...prev, data as Feature]);
+      setFeatureTabFilter((data as Feature).id);
+      setCreateFeatureForm({ name: "", color: FEATURE_PRESET_COLORS[0], description: "" });
+      setCreateFeatureOpen(false);
+    }
+    setCreateFeatureSaving(false);
+  }
+
+  async function deleteFeature(id: string) {
+    const { error } = await supabase.from("features").delete().eq("id", id);
+    if (!error) {
+      setFeatures(prev => prev.filter(f => f.id !== id));
+      if (featureTabFilter === id) setFeatureTabFilter("all");
+    }
+  }
 
   // ── Raised Issues CRUD ──────────────────────────────────────────
   async function loadIssues() {
@@ -474,6 +531,7 @@ export default function ProjectDashboard() {
               complexity: (backlogEditForm.complexity || undefined) as Task["complexity"],
               ...(compare.length > 0 ? { compare } : { compare: undefined }),
               ...(media.length > 0   ? { media }   : { media: undefined }),
+              featureId: backlogEditFeatureId ?? undefined,
             }
           : t,
       );
@@ -487,6 +545,7 @@ export default function ProjectDashboard() {
         setEditingBacklogTask(null);
         setBacklogEditMedia([]);
         setBacklogEditCompare([]);
+        setBacklogEditFeatureId(null);
       }
     } finally {
       setBacklogEditSaving(false);
@@ -505,6 +564,7 @@ export default function ProjectDashboard() {
   }, []);
 
   useEffect(() => { loadIssues(); }, []);
+  useEffect(() => { loadFeatures(); }, []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -613,6 +673,19 @@ export default function ProjectDashboard() {
 
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
 
+  // Feature progress stats — counts across all entries per feature
+  const featureStats = useMemo(() => {
+    return features.map(f => {
+      const allTasks = entries.flatMap(e => e.tasks).filter(t => t.featureId === f.id);
+      const done    = allTasks.filter(t => t.status === "done").length;
+      const inProg  = allTasks.filter(t => t.status === "progress").length;
+      const planned = allTasks.filter(t => t.status === "planned").length;
+      const total   = done + inProg + planned;
+      const pct     = total > 0 ? Math.round((done / total) * 100) : 0;
+      return { feature: f, done, inProg, planned, total, pct };
+    });
+  }, [features, entries]);
+
   const filteredPlannedItems = useMemo(() => {
     let base =
       backlogTagFilter === "all"
@@ -620,6 +693,11 @@ export default function ProjectDashboard() {
         : plannedItems.filter((item) =>
             (item.task.tags ?? []).includes(backlogTagFilter),
           );
+    if (featureTabFilter !== "all") {
+      base = featureTabFilter === "general"
+        ? base.filter(item => !item.task.featureId)
+        : base.filter(item => item.task.featureId === featureTabFilter);
+    }
     if (backlogPriorityFilter !== "all")
       base = base.filter((item) => item.task.priority === backlogPriorityFilter);
     if (backlogComplexityFilter !== "all")
@@ -631,7 +709,7 @@ export default function ProjectDashboard() {
         (PRIORITY_ORDER[a.task.priority ?? ""] ?? 3) -
         (PRIORITY_ORDER[b.task.priority ?? ""] ?? 3),
     );
-  }, [plannedItems, backlogTagFilter, backlogPriorityFilter, backlogComplexityFilter, backlogTypeFilter]);
+  }, [plannedItems, backlogTagFilter, backlogPriorityFilter, backlogComplexityFilter, backlogTypeFilter, featureTabFilter]);
 
   const stats = useMemo(() => {
     const base =
@@ -926,6 +1004,7 @@ export default function ProjectDashboard() {
             ...(quickAdd.tags.length > 0 ? { tags: quickAdd.tags } : {}),
             ...(compare.length > 0 ? { compare } : {}),
             ...(media.length > 0 ? { media } : {}),
+            ...(quickAddFeatureId ? { featureId: quickAddFeatureId } : {}),
           },
         ],
       };
@@ -935,6 +1014,7 @@ export default function ProjectDashboard() {
         setQuickAdd({ title: "", priority: "", complexity: "", type: "", tags: [] });
         setQuickAddMedia([]);
         setQuickAddCompare([]);
+        setQuickAddFeatureId(null);
         setQuickAddOpen(false);
       }
     } finally {
@@ -973,7 +1053,7 @@ export default function ProjectDashboard() {
                   <CheckCircle2 size={14} />
                   <span className="hidden sm:inline">Completed</span>
                   {doneCount > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-emerald-500 text-white text-[9px] font-bold px-1 leading-none">
+                    <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-emerald-700 text-white text-[9px] font-bold px-1 leading-none">
                       {doneCount}
                     </span>
                   )}
@@ -1024,7 +1104,7 @@ export default function ProjectDashboard() {
         <div className="mb-6">
           {/* Toggle bar — only shown in wizard mode; read-only always sees both */}
           {!readOnly && (
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
               <button
                 onClick={() => setStatsOpen(o => !o)}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-bold tracking-[0.2em] uppercase transition-colors select-none ${statsOpen ? "bg-slate-800 text-slate-300" : "text-slate-600 hover:text-slate-400"}`}
@@ -1039,6 +1119,15 @@ export default function ProjectDashboard() {
                 {heatmapOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
                 Activity
               </button>
+              {features.length > 0 && (
+                <button
+                  onClick={() => setFeatureProgressOpen(o => !o)}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-bold tracking-[0.2em] uppercase transition-colors select-none ${featureProgressOpen ? "bg-slate-800 text-slate-300" : "text-slate-600 hover:text-slate-400"}`}
+                >
+                  {featureProgressOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                  Features
+                </button>
+              )}
             </div>
           )}
 
@@ -1048,14 +1137,14 @@ export default function ProjectDashboard() {
               {(readOnly || statsOpen) && (
                 <div className="flex-1 min-w-0">
                   <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <StatCard label="Total Tasks" value={stats.total}      accent="border-teal-400/60"    accentBg="bg-teal-400/8"     icon={CheckCircle2}      iconColor="text-teal-400"    delay={0}   />
-                    <StatCard label="Features"    value={stats.features}   accent="border-emerald-300/60" accentBg="bg-emerald-400/8"  icon={ArrowUpNarrowWide} iconColor="text-emerald-400" delay={40}  />
-                    <StatCard label="Bug Fixes"   value={stats.bugs}       accent="border-orange-400/60"  accentBg="bg-orange-400/8"   icon={Bug}               iconColor="text-orange-400"  delay={80}  />
-                    <StatCard label="Optimized"   value={stats.optimized}  accent="border-cyan-400/60"    accentBg="bg-cyan-400/8"     icon={Zap}               iconColor="text-cyan-400"    delay={120} />
-                    <StatCard label="Tasks"       value={stats.tasks}      accent="border-teal-300/60"    accentBg="bg-teal-400/8"     icon={CheckCircle2}      iconColor="text-teal-300"    delay={160} />
-                    <StatCard label="Milestones"  value={stats.milestones} accent="border-yellow-400/60"  accentBg="bg-yellow-400/8"   icon={ArrowRight}        iconColor="text-yellow-400"  delay={200} />
-                    <StatCard label="Refactored"  value={stats.refactors}  accent="border-purple-400/60"  accentBg="bg-purple-400/8"   icon={RefreshCw}         iconColor="text-purple-400"  delay={240} />
-                    <StatCard label="Learnings"   value={stats.learnings}  accent="border-violet-400/60"  accentBg="bg-violet-400/8"   icon={BookOpen}          iconColor="text-violet-400"  delay={280} />
+                    <StatCard label="Total Tasks" value={stats.total}      accent="border-green-400/60"   accentBg="bg-green-400/8"    icon={CheckCircle2}      iconColor="text-green-400"   glowColor="rgba(74,222,128,0.45)"   delay={0}   />
+                    <StatCard label="Features"    value={stats.features}   accent="border-emerald-400/60" accentBg="bg-emerald-400/8"  icon={ArrowUpNarrowWide} iconColor="text-emerald-400" glowColor="rgba(52,211,153,0.45)"   delay={40}  />
+                    <StatCard label="Bug Fixes"   value={stats.bugs}       accent="border-orange-400/60"  accentBg="bg-orange-400/8"   icon={Bug}               iconColor="text-orange-400"  glowColor="rgba(251,146,60,0.45)"   delay={80}  />
+                    <StatCard label="Optimized"   value={stats.optimized}  accent="border-cyan-400/60"    accentBg="bg-cyan-400/8"     icon={Zap}               iconColor="text-cyan-400"    glowColor="rgba(34,211,238,0.45)"   delay={120} />
+                    <StatCard label="Tasks"       value={stats.tasks}      accent="border-teal-300/60"    accentBg="bg-teal-300/8"     icon={CheckCircle2}      iconColor="text-teal-300"    glowColor="rgba(94,234,212,0.45)"   delay={160} />
+                    <StatCard label="Milestones"  value={stats.milestones} accent="border-amber-400/60"   accentBg="bg-amber-400/8"    icon={ArrowRight}        iconColor="text-amber-400"   glowColor="rgba(251,191,36,0.45)"   delay={200} />
+                    <StatCard label="Refactored"  value={stats.refactors}  accent="border-fuchsia-400/60" accentBg="bg-fuchsia-400/8"  icon={RefreshCw}         iconColor="text-fuchsia-400" glowColor="rgba(232,121,249,0.45)"  delay={240} />
+                    <StatCard label="Learnings"   value={stats.learnings}  accent="border-indigo-400/60"  accentBg="bg-indigo-400/8"   icon={BookOpen}          iconColor="text-indigo-400"  glowColor="rgba(129,140,248,0.45)"  delay={280} />
                   </section>
                 </div>
               )}
@@ -1067,6 +1156,51 @@ export default function ProjectDashboard() {
             </div>
           )}
         </div>
+
+        {/* ── Feature Progress Panel ───────────────────────── */}
+        {(featureProgressOpen || readOnly) && features.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/40 backdrop-blur-sm p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp size={13} className="text-indigo-400" />
+              <span className="text-[11px] font-bold tracking-widest uppercase text-slate-400">New Feature Progress</span>
+              <span className="text-[10px] text-slate-600">{features.length} feature{features.length !== 1 ? "s" : ""}</span>
+            </div>
+            <div className="flex flex-col gap-3">
+              {featureStats.map(({ feature, done, inProg, planned, total, pct }) => (
+                <div key={feature.id} className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: feature.color }} />
+                      <span className="text-[11px] font-semibold text-slate-300 truncate">{feature.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex items-center gap-2 text-[9px] text-slate-500">
+                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />{done} done</span>
+                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />{inProg} in progress</span>
+                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-slate-600" />{planned} planned</span>
+                      </div>
+                      <span className="text-[11px] font-bold w-8 text-right" style={{ color: feature.color }}>{pct}%</span>
+                    </div>
+                  </div>
+                  {/* Progress bar */}
+                  <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-500 flex">
+                      {done > 0 && total > 0 && (
+                        <div className="h-full bg-emerald-400 transition-all duration-500" style={{ width: `${(done / total) * 100}%` }} />
+                      )}
+                      {inProg > 0 && total > 0 && (
+                        <div className="h-full bg-yellow-400/70 transition-all duration-500" style={{ width: `${(inProg / total) * 100}%` }} />
+                      )}
+                    </div>
+                  </div>
+                  {total === 0 && (
+                    <span className="text-[9px] text-slate-600 italic">No tasks yet — add some from the Planning Phase</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── In Progress + Issues panels ────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
@@ -1397,14 +1531,29 @@ export default function ProjectDashboard() {
               backlogPage * BL_PER_PAGE,
             );
             const hasBacklogFilters = backlogPriorityFilter !== "all" || backlogComplexityFilter !== "all" || backlogTypeFilter !== "all" || backlogTagFilter !== "all";
+            const activeFeature = featureTabFilter !== "all" && featureTabFilter !== "general"
+              ? features.find(f => f.id === featureTabFilter) ?? null
+              : null;
             return (
-              <section className="flex flex-col gap-3 p-4 rounded-2xl border border-blue-400/20 bg-blue-400/5">
+              <section
+                className={`flex flex-col gap-3 p-4 rounded-2xl border transition-all duration-300${!activeFeature ? " border-blue-400/20 bg-blue-400/5" : ""}`}
+                style={activeFeature ? {
+                  borderColor: activeFeature.color + "40",
+                  backgroundColor: activeFeature.color + "0d",
+                } : undefined}
+              >
                 {/* Header row */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
-                    <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-blue-400">
-                      Planning Phase
+                    <span
+                      className="w-1.5 h-1.5 rounded-full shrink-0 transition-colors duration-300"
+                      style={{ backgroundColor: activeFeature ? activeFeature.color : "#60a5fa" }}
+                    />
+                    <span
+                      className="text-[11px] font-bold tracking-[0.2em] uppercase transition-colors duration-300"
+                      style={{ color: activeFeature ? activeFeature.color : "#60a5fa" }}
+                    >
+                      {activeFeature ? activeFeature.name : "Planning Phase"}
                     </span>
                     <span className="text-[11px] text-slate-600">
                       {filteredPlannedItems.length}
@@ -1423,9 +1572,22 @@ export default function ProjectDashboard() {
                     {!readOnly && (
                       <button
                         onClick={() => {
-                          setQuickAdd({ title: "", priority: "", complexity: "", type: "", tags: [] });
+                          const activeFeature = featureTabFilter !== "all" && featureTabFilter !== "general"
+                            ? features.find(f => f.id === featureTabFilter) ?? null
+                            : null;
+                          const featureTag = activeFeature
+                            ? activeFeature.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
+                            : "";
+                          setQuickAdd({
+                            title: "",
+                            type: activeFeature ? "feature" : "",
+                            priority: activeFeature ? "minor" : "",
+                            complexity: activeFeature ? "hard" : "",
+                            tags: featureTag ? [featureTag] : [],
+                          });
                           setQuickAddMedia([]);
                           setQuickAddCompare([]);
+                          setQuickAddFeatureId(activeFeature ? activeFeature.id : null);
                           setQuickAddOpen(true);
                         }}
                         className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
@@ -1434,6 +1596,55 @@ export default function ProjectDashboard() {
                       </button>
                     )}
                   </div>
+                </div>
+
+                {/* Feature tabs */}
+                <div className="flex items-center gap-1 flex-wrap">
+                  {[
+                    { id: "all", label: "All", color: null, deletable: false },
+                    { id: "general", label: "General", color: null, deletable: false },
+                    ...features.map(f => ({ id: f.id, label: f.name, color: f.color, deletable: true })),
+                  ].map(tab => (
+                    <div key={tab.id} className="group relative flex items-center">
+                      <button
+                        onClick={() => { setFeatureTabFilter(tab.id); setBacklogPage(1); }}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors border ${
+                          featureTabFilter === tab.id
+                            ? "bg-blue-400/15 border-blue-400/40 text-blue-300"
+                            : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"
+                        } ${tab.deletable ? "pr-5" : ""}`}
+                      >
+                        {tab.color && (
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tab.color }} />
+                        )}
+                        {tab.label}
+                        <span className="text-[9px] opacity-60">
+                          {tab.id === "all"
+                            ? plannedItems.length
+                            : tab.id === "general"
+                            ? plannedItems.filter(i => !i.task.featureId).length
+                            : plannedItems.filter(i => i.task.featureId === tab.id).length}
+                        </span>
+                      </button>
+                      {!readOnly && tab.deletable && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteFeatureId(tab.id); }}
+                            className="absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity text-slate-600 hover:text-red-400"
+                            title="Delete feature"
+                          >
+                            <X size={9} />
+                          </button>
+                      )}
+                    </div>
+                  ))}
+                  {!readOnly && (
+                    <button
+                      onClick={() => setCreateFeatureOpen(true)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] text-slate-600 hover:text-blue-400 hover:border-blue-400/30 border border-transparent transition-colors"
+                    >
+                      <Plus size={9} /> New feature
+                    </button>
+                  )}
                 </div>
 
                 {/* Filter panel */}
@@ -1571,6 +1782,24 @@ export default function ProjectDashboard() {
                                     </button>
                                   ))}
                                 </div>
+                                {/* Feature (Epic) */}
+                                {features.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 shrink-0">Feature</span>
+                                    <button type="button" onClick={() => setBacklogEditFeatureId(null)}
+                                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors border ${!backlogEditFeatureId ? "bg-slate-700/60 border-slate-600 text-slate-300" : "border-slate-800 text-slate-500 hover:border-slate-700"}`}>
+                                      General
+                                    </button>
+                                    {features.map(f => (
+                                      <button key={f.id} type="button" onClick={() => setBacklogEditFeatureId(f.id)}
+                                        className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors border ${backlogEditFeatureId === f.id ? "text-white" : "border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300"}`}
+                                        style={backlogEditFeatureId === f.id ? { borderColor: f.color, backgroundColor: f.color + "22", color: f.color } : undefined}>
+                                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: f.color }} />
+                                        {f.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
                                 {/* Type + Priority + Severity */}
                                 <div className="grid grid-cols-3 gap-1.5">
                                   <select value={backlogEditForm.type} onChange={(e) => setBacklogEditForm((f) => ({ ...f, type: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none">
@@ -1660,7 +1889,7 @@ export default function ProjectDashboard() {
                                   <button onClick={saveBacklogEdit} disabled={!backlogEditForm.title.trim() || backlogEditSaving} className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors disabled:opacity-50">
                                     <Save size={10} /> {backlogEditSaving ? "Saving…" : "Save"}
                                   </button>
-                                  <button onClick={() => { setEditingBacklogTask(null); setBacklogEditMedia([]); setBacklogEditCompare([]); }} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors">
+                                  <button onClick={() => { setEditingBacklogTask(null); setBacklogEditMedia([]); setBacklogEditCompare([]); setBacklogEditFeatureId(null); }} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors">
                                     Cancel
                                   </button>
                                 </div>
@@ -1730,6 +1959,7 @@ export default function ProjectDashboard() {
                                         setBacklogEditForm({ title: item.task.title, priority: item.task.priority ?? "", complexity: item.task.complexity ?? "", type: item.task.type ?? "", project: item.entryProject });
                                         setBacklogEditMedia((item.task.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" })));
                                         setBacklogEditCompare((item.task.compare ?? []).map(c => ({ label: c.label ?? "", before: { file: null, preview: c.before.src, note: c.before.note }, after: { file: null, preview: c.after.src, note: c.after.note } })));
+                                        setBacklogEditFeatureId(item.task.featureId ?? null);
                                       }}
                                       className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
                                       title="Edit task"
@@ -2083,7 +2313,7 @@ export default function ProjectDashboard() {
               />
 
               {/* Project */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 shrink-0">Project</span>
                 {(["VC+", "VC+ CMS"] as const).map((p) => (
                   <button
@@ -2100,6 +2330,36 @@ export default function ProjectDashboard() {
                   </button>
                 ))}
               </div>
+
+              {/* Feature (Epic) */}
+              {features.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 shrink-0">Feature</span>
+                  <button
+                    type="button"
+                    onClick={() => setQuickAddFeatureId(null)}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors border ${
+                      !quickAddFeatureId ? "bg-slate-700/60 border-slate-600 text-slate-300" : "border-slate-800 text-slate-500 hover:border-slate-700"
+                    }`}
+                  >
+                    General
+                  </button>
+                  {features.map(f => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setQuickAddFeatureId(f.id)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors border ${
+                        quickAddFeatureId === f.id ? "border-opacity-60 text-white" : "border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300"
+                      }`}
+                      style={quickAddFeatureId === f.id ? { borderColor: f.color, backgroundColor: f.color + "22", color: f.color } : undefined}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: f.color }} />
+                      {f.name}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               {/* Type + Priority + Severity */}
               <div className="grid grid-cols-3 gap-2">
@@ -2280,6 +2540,137 @@ export default function ProjectDashboard() {
                 className="w-full rounded-xl bg-blue-500/20 border border-blue-500/40 text-blue-300 text-sm font-semibold py-2.5 hover:bg-blue-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {quickAddSaving ? "Saving…" : "Add to Backlog"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Delete Feature Confirm Modal ─────────────────── */}
+      {confirmDeleteFeatureId && (() => {
+        const target = features.find(f => f.id === confirmDeleteFeatureId);
+        if (!target) return null;
+        return (
+          <>
+            <div
+              onClick={() => setConfirmDeleteFeatureId(null)}
+              className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm"
+            />
+            <div className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden">
+              <div className="flex flex-col items-center gap-4 px-6 py-6 text-center">
+                <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                  <Trash2 size={20} className="text-red-400" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <h3 className="text-base font-bold text-slate-100">Delete Feature?</h3>
+                  <p className="text-sm text-slate-400 leading-relaxed">
+                    Are you sure you want to delete{" "}
+                    <span className="font-semibold" style={{ color: target.color }}>{target.name}</span>?
+                    {" "}Tasks assigned to it won't be deleted, but they'll lose their feature link.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3 px-6 pb-6">
+                <button
+                  onClick={() => setConfirmDeleteFeatureId(null)}
+                  className="flex-1 rounded-xl border border-slate-700 text-slate-300 text-sm font-semibold py-2.5 hover:bg-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => { deleteFeature(confirmDeleteFeatureId); setConfirmDeleteFeatureId(null); }}
+                  className="flex-1 rounded-xl bg-red-500/15 border border-red-500/40 text-red-400 text-sm font-semibold py-2.5 hover:bg-red-500/25 transition-colors"
+                >
+                  Delete Feature
+                </button>
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* ── Create Feature Modal ─────────────────────────── */}
+      {createFeatureOpen && (
+        <>
+          <div
+            onClick={() => setCreateFeatureOpen(false)}
+            className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm"
+          />
+          <div className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+              <span className="text-[11px] font-bold tracking-[0.25em] uppercase text-indigo-400">New Feature Epic</span>
+              <button onClick={() => setCreateFeatureOpen(false)} className="text-slate-600 hover:text-slate-300 transition-colors">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="flex flex-col gap-4 px-5 py-4">
+              {/* Name */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Feature Name</label>
+                <input
+                  autoFocus
+                  value={createFeatureForm.name}
+                  onChange={(e) => setCreateFeatureForm(f => ({ ...f, name: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") createFeature(); if (e.key === "Escape") setCreateFeatureOpen(false); }}
+                  placeholder="e.g. Food Ordering"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500/60 placeholder:text-slate-600 transition-colors"
+                />
+              </div>
+              {/* Color */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Color</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {FEATURE_PRESET_COLORS.map(c => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCreateFeatureForm(f => ({ ...f, color: c }))}
+                      className="w-6 h-6 rounded-full border-2 transition-all"
+                      style={{
+                        backgroundColor: c,
+                        borderColor: createFeatureForm.color === c ? "#fff" : "transparent",
+                        boxShadow: createFeatureForm.color === c ? `0 0 0 1px ${c}` : "none",
+                      }}
+                    />
+                  ))}
+                  {/* Custom color input */}
+                  <label className="w-6 h-6 rounded-full border border-dashed border-slate-600 flex items-center justify-center text-slate-500 hover:border-slate-400 transition-colors cursor-pointer overflow-hidden">
+                    <input
+                      type="color"
+                      value={createFeatureForm.color}
+                      onChange={(e) => setCreateFeatureForm(f => ({ ...f, color: e.target.value }))}
+                      className="opacity-0 absolute w-0 h-0"
+                    />
+                    <span className="w-3 h-3 rounded-full" style={{ backgroundColor: createFeatureForm.color }} />
+                  </label>
+                </div>
+              </div>
+              {/* Description */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Description <span className="text-slate-700 normal-case tracking-normal font-normal">(optional)</span></label>
+                <textarea
+                  value={createFeatureForm.description}
+                  onChange={(e) => setCreateFeatureForm(f => ({ ...f, description: e.target.value }))}
+                  placeholder="What is this feature about?"
+                  rows={2}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500/60 placeholder:text-slate-600 resize-none transition-colors"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-800 flex gap-2">
+              <button
+                onClick={() => setCreateFeatureOpen(false)}
+                className="flex-1 rounded-xl border border-slate-700 text-slate-400 text-sm font-semibold py-2 hover:bg-slate-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createFeature}
+                disabled={!createFeatureForm.name.trim() || createFeatureSaving}
+                className="flex-2 rounded-xl bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-sm font-semibold py-2 px-4 hover:bg-indigo-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 justify-center"
+              >
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: createFeatureForm.color }} />
+                {createFeatureSaving ? "Creating…" : "Create Feature"}
               </button>
             </div>
           </div>
@@ -2487,6 +2878,7 @@ export default function ProjectDashboard() {
         .fire-orb-pulse { animation: orbPulse 2s ease-in-out infinite; }
         .fire-emoji   { display: inline-block; animation: flicker 1s ease-in-out infinite; }
         .hm-cell      { fill: var(--hmc, #1a2332) !important; }
+        svg.lucide    { filter: drop-shadow(0 0 5px color-mix(in srgb, currentColor 45%, transparent)); }
       `}</style>
     </div>
   );
@@ -3343,6 +3735,7 @@ function StatCard({
   accent,
   accentBg = "bg-slate-900/60",
   iconColor,
+  glowColor,
   icon: Icon,
   delay = 0,
 }: {
@@ -3351,6 +3744,7 @@ function StatCard({
   accent: string;
   accentBg?: string;
   iconColor: string;
+  glowColor?: string;
   icon: ComponentType<{ size?: number; className?: string }>;
   delay?: number;
 }) {
@@ -3360,7 +3754,9 @@ function StatCard({
       style={{ animationDelay: `${delay}ms` }}
     >
       <div className="flex items-center justify-between mb-1">
-        <Icon size={14} className={iconColor} />
+        <span style={glowColor ? { filter: `drop-shadow(0 0 5px ${glowColor})` } : undefined}>
+          <Icon size={14} className={iconColor} />
+        </span>
       </div>
       <div className={`font-serif text-2xl sm:text-3xl leading-none ${iconColor}`}>
         {value}
@@ -3927,11 +4323,11 @@ function ViewEntryModal({
 // RAISED ISSUES PANEL
 // ════════════════════════════════════════════════════════════════════
 const ISSUE_TYPE_META: Record<string, { label: string; text: string; bg: string }> = {
-  bugfix:    { label: "Bug Fix",   text: "text-orange-400", bg: "bg-orange-400/10" },
-  feature:   { label: "Feature",   text: "text-emerald-400", bg: "bg-emerald-400/10" },
-  optimized: { label: "Optimized", text: "text-cyan-400",   bg: "bg-cyan-400/10" },
-  task:      { label: "Task",      text: "text-teal-400",   bg: "bg-teal-400/10" },
-  other:     { label: "Other",     text: "text-slate-400",  bg: "bg-slate-800" },
+  bugfix:    { label: "Bug Fix",   text: "text-orange-400",  bg: "bg-orange-400/12" },
+  feature:   { label: "Feature",   text: "text-emerald-400", bg: "bg-emerald-400/12" },
+  optimized: { label: "Optimized", text: "text-cyan-400",    bg: "bg-cyan-400/10" },
+  task:      { label: "Task",      text: "text-teal-300",    bg: "bg-teal-300/10" },
+  other:     { label: "Other",     text: "text-slate-400",   bg: "bg-slate-800" },
 };
 
 function RaisedIssuesPanel({

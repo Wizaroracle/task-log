@@ -4,7 +4,9 @@
       "Bash(npm install *)",
       "Bash(npm run *)",
       "Bash(npx tsc *)",
-      "Bash(awk -F: '{if \\($1 <= 3760\\) print}')"
+      "Bash(awk -F: '{if \\($1 <= 3760\\) print}')",
+      "Bash(awk 'NR>=2400 && NR<=2500 {print NR\": \"$0}' /Users/christianjonelcananes/Desktop/vc-documentation/src/App.tsx)",
+      "Bash(awk 'NR>=2500 && NR<=2560 {print NR\": \"$0}' /Users/christianjonelcananes/Desktop/vc-documentation/src/App.tsx)"
     ]
   }
 }
