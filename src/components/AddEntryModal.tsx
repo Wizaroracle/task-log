@@ -18,6 +18,7 @@ export type InProgressItem = {
   entryId: string;
   entryTitle: string;
   entryDate: string;
+  entryProject: string;
   task: Task;
 };
 import { supabase } from "../utils/supabase";

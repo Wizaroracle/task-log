@@ -29,6 +29,9 @@ import {
   TrendingUp,
   Sparkles,
   Filter,
+  ChevronUp,
+  ChevronDown,
+  GitCommitHorizontal,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
 import type { CompareItem, Entry, EntryMedia, RaisedIssue, Task } from "./utils/entries/entries";
@@ -238,19 +241,32 @@ export default function ProjectDashboard() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddSaving, setQuickAddSaving] = useState(false);
+  const [quickAddProject, setQuickAddProject] = useState<"VC+" | "VC+ CMS">("VC+");
   const [quickAdd, setQuickAdd] = useState({
     title: "",
     priority: "",
     complexity: "",
+    type: "",
     tags: [] as string[],
   });
+  const [quickAddMedia, setQuickAddMedia] = useState<Array<{ file: File | null; preview: string; caption: string }>>([]);
+  const [quickAddCompare, setQuickAddCompare] = useState<Array<{
+    label: string;
+    before: { file: File | null; preview: string; note: string };
+    after: { file: File | null; preview: string; note: string };
+  }>>([]);
   const [backlogTagFilter, setBacklogTagFilter] = useState("all");
+  const [backlogFilterOpen, setBacklogFilterOpen] = useState(false);
+  const [backlogPriorityFilter, setBacklogPriorityFilter] = useState("all");
+  const [backlogComplexityFilter, setBacklogComplexityFilter] = useState("all");
+  const [backlogTypeFilter, setBacklogTypeFilter] = useState("all");
   const [backlogPage, setBacklogPage] = useState(1);
   const [inProgressPage, setInProgressPage] = useState(1);
   const [page, setPage] = useState(1);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [zoomSrc, setZoomSrc] = useState<string | null>(null);
+  const [compareZoom, setCompareZoom] = useState<CompareItem | null>(null);
   const [viewingEntry, setViewingEntry] = useState<Entry | null>(null);
   const [readOnly, setReadOnly] = useState<boolean>(
     () => sessionStorage.getItem("vc-mode") !== "wizard",
@@ -262,8 +278,12 @@ export default function ProjectDashboard() {
   // Completed panel
   const [completedOpen, setCompletedOpen] = useState(false);
 
-  // Completion toast
-  const [completionToast, setCompletionToast] = useState<{ headline: string; sub: string; verse: string; ref: string } | null>(null);
+  // Stats + heatmap collapse
+  const [statsOpen, setStatsOpen] = useState(true);
+  const [heatmapOpen, setHeatmapOpen] = useState(true);
+
+  // Completion toasts — stacked array, newest first
+  const [toasts, setToasts] = useState<Array<{ id: string; headline: string; sub: string; verse: string; ref: string }>>([]);
 
   function fireCompletionToast(task?: { type?: string; complexity?: string; priority?: string }, forIssue = false) {
     const { text, ref } = BIBLE_VERSES[Math.floor(Math.random() * BIBLE_VERSES.length)];
@@ -300,8 +320,9 @@ export default function ProjectDashboard() {
       headline = "Knowledge gained! 📖";
       sub = "Every lesson compounds. You're investing in yourself.";
     }
-    setCompletionToast({ headline, sub, verse: text, ref });
-    setTimeout(() => setCompletionToast(null), 7000);
+    const id = crypto.randomUUID();
+    setToasts(prev => [{ id, headline, sub, verse: text, ref }, ...prev]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 7000);
   }
 
   // Raised Issues — report modal
@@ -325,7 +346,10 @@ export default function ProjectDashboard() {
 
   // Backlog inline edit
   const [editingBacklogTask, setEditingBacklogTask] = useState<import("./components/AddEntryModal").InProgressItem | null>(null);
-  const [backlogEditForm, setBacklogEditForm] = useState<{ title: string; priority: string; complexity: string }>({ title: "", priority: "", complexity: "" });
+  const [backlogEditForm, setBacklogEditForm] = useState<{ title: string; priority: string; complexity: string; type: string; project: string }>({ title: "", priority: "", complexity: "", type: "", project: "" });
+  const [backlogEditMedia, setBacklogEditMedia] = useState<Array<{ file: File | null; preview: string; caption: string }>>([]);
+  const [backlogEditCompare, setBacklogEditCompare] = useState<Array<{ label: string; before: { file: File | null; preview: string; note: string }; after: { file: File | null; preview: string; note: string } }>>([]);
+  const [backlogEditSaving, setBacklogEditSaving] = useState(false);
 
   const requestWizardMode = () => {
     if (!readOnly) {
@@ -424,20 +448,48 @@ export default function ProjectDashboard() {
     if (!editingBacklogTask || !backlogEditForm.title.trim()) return;
     const entry = entries.find((e) => e.id === editingBacklogTask.entryId);
     if (!entry) return;
-    const updatedTasks = entry.tasks.map((t) =>
-      t.title === editingBacklogTask.task.title && t.status === "planned"
-        ? {
-            ...t,
-            title: backlogEditForm.title.trim(),
-            priority: (backlogEditForm.priority || undefined) as Task["priority"],
-            complexity: (backlogEditForm.complexity || undefined) as Task["complexity"],
-          }
-        : t,
-    );
-    const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
-    if (!error) {
-      setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
-      setEditingBacklogTask(null);
+    setBacklogEditSaving(true);
+    try {
+      const media: import("./utils/entries/entries").EntryMedia[] = backlogEditMedia.length > 0
+        ? await Promise.all(backlogEditMedia.map(async (m) => ({
+            kind: "image" as const,
+            src: m.file ? await uploadFile(m.file) : m.preview,
+            caption: m.caption || undefined,
+          })))
+        : [];
+      const compare: import("./utils/entries/entries").CompareItem[] = backlogEditCompare.length > 0
+        ? await Promise.all(backlogEditCompare.map(async (c) => ({
+            label: c.label || undefined,
+            before: { src: c.before.file ? await uploadFile(c.before.file) : c.before.preview, note: c.before.note },
+            after:  { src: c.after.file  ? await uploadFile(c.after.file)  : c.after.preview,  note: c.after.note  },
+          })))
+        : [];
+      const updatedTasks = entry.tasks.map((t) =>
+        t.title === editingBacklogTask.task.title && t.status === "planned"
+          ? {
+              ...t,
+              title: backlogEditForm.title.trim(),
+              type: (backlogEditForm.type || undefined) as Task["type"],
+              priority: (backlogEditForm.priority || undefined) as Task["priority"],
+              complexity: (backlogEditForm.complexity || undefined) as Task["complexity"],
+              ...(compare.length > 0 ? { compare } : { compare: undefined }),
+              ...(media.length > 0   ? { media }   : { media: undefined }),
+            }
+          : t,
+      );
+      const updates: Record<string, unknown> = { tasks: updatedTasks };
+      if (backlogEditForm.project && backlogEditForm.project !== entry.project) {
+        updates.project = backlogEditForm.project;
+      }
+      const { error } = await supabase.from("entries").update(updates).eq("id", entry.id);
+      if (!error) {
+        setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, ...updates, tasks: updatedTasks } : e));
+        setEditingBacklogTask(null);
+        setBacklogEditMedia([]);
+        setBacklogEditCompare([]);
+      }
+    } finally {
+      setBacklogEditSaving(false);
     }
   }
 
@@ -468,7 +520,7 @@ export default function ProjectDashboard() {
 
   useEffect(() => {
     setBacklogPage(1);
-  }, [backlogTagFilter]);
+  }, [backlogTagFilter, backlogPriorityFilter, backlogComplexityFilter, backlogTypeFilter]);
 
   const projects = useMemo(
     () => Array.from(new Set(entries.map((e) => e.project))),
@@ -513,6 +565,7 @@ export default function ProjectDashboard() {
             entryId: e.id,
             entryTitle: e.title,
             entryDate: e.date,
+            entryProject: e.project,
             task: t,
           });
         }
@@ -540,6 +593,7 @@ export default function ProjectDashboard() {
             entryId: e.id,
             entryTitle: e.title,
             entryDate: e.date,
+            entryProject: e.project,
             task: t,
           });
         }
@@ -560,18 +614,24 @@ export default function ProjectDashboard() {
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
 
   const filteredPlannedItems = useMemo(() => {
-    const base =
+    let base =
       backlogTagFilter === "all"
         ? plannedItems
         : plannedItems.filter((item) =>
             (item.task.tags ?? []).includes(backlogTagFilter),
           );
+    if (backlogPriorityFilter !== "all")
+      base = base.filter((item) => item.task.priority === backlogPriorityFilter);
+    if (backlogComplexityFilter !== "all")
+      base = base.filter((item) => item.task.complexity === backlogComplexityFilter);
+    if (backlogTypeFilter !== "all")
+      base = base.filter((item) => (item.task.type ?? "task") === backlogTypeFilter);
     return [...base].sort(
       (a, b) =>
         (PRIORITY_ORDER[a.task.priority ?? ""] ?? 3) -
         (PRIORITY_ORDER[b.task.priority ?? ""] ?? 3),
     );
-  }, [plannedItems, backlogTagFilter]);
+  }, [plannedItems, backlogTagFilter, backlogPriorityFilter, backlogComplexityFilter, backlogTypeFilter]);
 
   const stats = useMemo(() => {
     const base =
@@ -832,33 +892,54 @@ export default function ProjectDashboard() {
   async function handleQuickAddSave() {
     if (!quickAdd.title.trim()) return;
     setQuickAddSaving(true);
-    const today = new Date().toISOString().slice(0, 10);
-    const newEntry: Entry = {
-      id: crypto.randomUUID(),
-      project: "VC+",
-      date: today,
-      title: quickAdd.title.trim(),
-      tasks: [
-        {
-          title: quickAdd.title.trim(),
-          status: "planned",
-          ...(quickAdd.priority
-            ? { priority: quickAdd.priority as Task["priority"] }
-            : {}),
-          ...(quickAdd.complexity
-            ? { complexity: quickAdd.complexity as Task["complexity"] }
-            : {}),
-          ...(quickAdd.tags.length > 0 ? { tags: quickAdd.tags } : {}),
-        },
-      ],
-    };
-    const { error } = await supabase.from("entries").insert(newEntry);
-    if (!error) {
-      setEntries((prev) => [newEntry, ...prev]);
-      setQuickAdd({ title: "", priority: "", complexity: "", tags: [] });
-      setQuickAddOpen(false);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+
+      const media: import("./utils/entries/entries").EntryMedia[] = quickAddMedia.length > 0
+        ? await Promise.all(quickAddMedia.map(async (m) => ({
+            kind: "image" as const,
+            src: m.file ? await uploadFile(m.file) : m.preview,
+            caption: m.caption || undefined,
+          })))
+        : [];
+
+      const compare: import("./utils/entries/entries").CompareItem[] = quickAddCompare.length > 0
+        ? await Promise.all(quickAddCompare.map(async (c) => ({
+            label: c.label || undefined,
+            before: { src: c.before.file ? await uploadFile(c.before.file) : c.before.preview, note: c.before.note },
+            after:  { src: c.after.file  ? await uploadFile(c.after.file)  : c.after.preview,  note: c.after.note },
+          })))
+        : [];
+
+      const newEntry: Entry = {
+        id: crypto.randomUUID(),
+        project: quickAddProject,
+        date: today,
+        title: quickAdd.title.trim(),
+        tasks: [
+          {
+            title: quickAdd.title.trim(),
+            status: "planned",
+            ...(quickAdd.type ? { type: quickAdd.type as Task["type"] } : {}),
+            ...(quickAdd.priority ? { priority: quickAdd.priority as Task["priority"] } : {}),
+            ...(quickAdd.complexity ? { complexity: quickAdd.complexity as Task["complexity"] } : {}),
+            ...(quickAdd.tags.length > 0 ? { tags: quickAdd.tags } : {}),
+            ...(compare.length > 0 ? { compare } : {}),
+            ...(media.length > 0 ? { media } : {}),
+          },
+        ],
+      };
+      const { error } = await supabase.from("entries").insert(newEntry);
+      if (!error) {
+        setEntries((prev) => [newEntry, ...prev]);
+        setQuickAdd({ title: "", priority: "", complexity: "", type: "", tags: [] });
+        setQuickAddMedia([]);
+        setQuickAddCompare([]);
+        setQuickAddOpen(false);
+      }
+    } finally {
+      setQuickAddSaving(false);
     }
-    setQuickAddSaving(false);
   }
 
   const hasFilters =
@@ -870,31 +951,27 @@ export default function ProjectDashboard() {
 
       <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
         {/* ── Header ─────────────────────────────────────────── */}
-        <header className="mb-8 sm:mb-10 flex items-start justify-between gap-4">
+        <header className="mb-4 sm:mb-5 flex items-center justify-between gap-4">
           <div>
             <div className="text-[11px] sm:text-xs font-bold tracking-[0.25em] uppercase text-emerald-400 mb-2 animate-fade-in">
-              Build Logs - wizaroracle
+              victoria court - Nel
             </div>
-            <h1 className="font-serif text-3xl sm:text-4xl lg:text-5xl tracking-tight text-slate-50 animate-fade-in-up">
-              VC Task Logs
+            <h1 className="font-serif text-3xl sm:text-4xl lg:text-4xl tracking-tight text-slate-50 animate-fade-in-up">
+              WIZARD LOGS
             </h1>
-            <p className="mt-3 max-w-xl text-sm sm:text-base text-slate-400 animate-fade-in-up [animation-delay:80ms]">
-              Every completed task, shipped feature, and fixed bug, across all
-              the projects, filterable in one place.
-            </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 shrink-0 max-w-[55%] sm:max-w-none">
             {(() => {
               const doneCount = entries.flatMap(e => e.tasks).filter(t => t.status === "done").length
                 + issues.filter(i => i.status === "resolved").length;
               return (
                 <button
                   onClick={() => setCompletedOpen(true)}
-                  className="relative flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:10ms]"
+                  className="relative flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:10ms]"
                   title="Completed Work"
                 >
                   <CheckCircle2 size={14} />
-                  <span>Completed</span>
+                  <span className="hidden sm:inline">Completed</span>
                   {doneCount > 0 && (
                     <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-emerald-500 text-white text-[9px] font-bold px-1 leading-none">
                       {doneCount}
@@ -905,11 +982,11 @@ export default function ProjectDashboard() {
             })()}
             <button
               onClick={() => setIssuesOpen(true)}
-              className="relative flex items-center gap-1.5 rounded-xl border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-red-400/20 transition-colors animate-fade-in-up [animation-delay:20ms]"
+              className="relative flex items-center gap-1.5 rounded-xl border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-red-400/20 transition-colors animate-fade-in-up [animation-delay:20ms]"
               title="Issues Report"
             >
               <AlertCircle size={14} />
-              <span>Issues</span>
+              <span className="hidden sm:inline">Issues</span>
               {issues.filter(i => i.status !== "resolved").length > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-red-500 text-white text-[9px] font-bold px-1 leading-none">
                   {issues.filter(i => i.status !== "resolved").length}
@@ -919,18 +996,20 @@ export default function ProjectDashboard() {
             {(() => {
               const ipCount = inProgressItems.length + issues.filter(i => i.status === "in_progress").length;
               return ipCount > 0 ? (
-                <span className="flex items-center gap-1.5 text-xs text-yellow-400/80 font-medium px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl bg-yellow-400/8 border border-yellow-400/20 animate-fade-in-up [animation-delay:30ms]">
+                <span className="flex items-center gap-1.5 text-xs text-yellow-400/80 font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-xl bg-yellow-400/8 border border-yellow-400/20 animate-fade-in-up [animation-delay:30ms]">
                   <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
-                  {ipCount} in progress
+                  <span className="hidden sm:inline">{ipCount} in progress</span>
+                  <span className="sm:hidden font-mono text-[11px]">{ipCount}</span>
                 </span>
               ) : null;
             })()}
             {!readOnly && (
               <button
                 onClick={() => setFormOpen(true)}
-                className="flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-3 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:40ms]"
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:40ms]"
               >
-                <Plus size={14} /> New Entry
+                <Plus size={14} />
+                <span className="hidden sm:inline">New Entry</span>
               </button>
             )}
             <ProfileButton
@@ -941,17 +1020,53 @@ export default function ProjectDashboard() {
           </div>
         </header>
 
-        {/* ── Stats ──────────────────────────────────────────── */}
-        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-8 sm:mb-10">
-          <StatCard label="Total Tasks"  value={stats.total}      accent="border-teal-400/60"    icon={CheckCircle2}      iconColor="text-teal-400"    delay={0}   />
-          <StatCard label="Features"     value={stats.features}   accent="border-emerald-300/60" icon={ArrowUpNarrowWide} iconColor="text-emerald-400" delay={40}  />
-          <StatCard label="Bug Fixes"    value={stats.bugs}       accent="border-orange-400/60"  icon={Bug}               iconColor="text-orange-400"  delay={80}  />
-          <StatCard label="Optimized"    value={stats.optimized}  accent="border-cyan-400/60"    icon={Zap}               iconColor="text-cyan-400"    delay={120} />
-          <StatCard label="Tasks"        value={stats.tasks}      accent="border-teal-300/60"    icon={CheckCircle2}      iconColor="text-teal-300"    delay={160} />
-          <StatCard label="Milestones"   value={stats.milestones} accent="border-yellow-400/60"  icon={ArrowRight}        iconColor="text-yellow-400"  delay={200} />
-          <StatCard label="Refactored"   value={stats.refactors}  accent="border-purple-400/60"  icon={RefreshCw}         iconColor="text-purple-400"  delay={240} />
-          <StatCard label="Learnings"    value={stats.learnings}  accent="border-violet-400/60"  icon={BookOpen}          iconColor="text-violet-400"  delay={280} />
-        </section>
+        {/* ── Stats + Heatmap ───────────────────────────────── */}
+        <div className="mb-6">
+          {/* Toggle bar — only shown in wizard mode; read-only always sees both */}
+          {!readOnly && (
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={() => setStatsOpen(o => !o)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-bold tracking-[0.2em] uppercase transition-colors select-none ${statsOpen ? "bg-slate-800 text-slate-300" : "text-slate-600 hover:text-slate-400"}`}
+              >
+                {statsOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                Stats
+              </button>
+              <button
+                onClick={() => setHeatmapOpen(o => !o)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-bold tracking-[0.2em] uppercase transition-colors select-none ${heatmapOpen ? "bg-slate-800 text-slate-300" : "text-slate-600 hover:text-slate-400"}`}
+              >
+                {heatmapOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                Activity
+              </button>
+            </div>
+          )}
+
+          {/* Content — always visible in read-only; toggleable in wizard mode */}
+          {(readOnly || statsOpen || heatmapOpen) && (
+            <div className="flex flex-col xl:flex-row gap-4">
+              {(readOnly || statsOpen) && (
+                <div className="flex-1 min-w-0">
+                  <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <StatCard label="Total Tasks" value={stats.total}      accent="border-teal-400/60"    accentBg="bg-teal-400/8"     icon={CheckCircle2}      iconColor="text-teal-400"    delay={0}   />
+                    <StatCard label="Features"    value={stats.features}   accent="border-emerald-300/60" accentBg="bg-emerald-400/8"  icon={ArrowUpNarrowWide} iconColor="text-emerald-400" delay={40}  />
+                    <StatCard label="Bug Fixes"   value={stats.bugs}       accent="border-orange-400/60"  accentBg="bg-orange-400/8"   icon={Bug}               iconColor="text-orange-400"  delay={80}  />
+                    <StatCard label="Optimized"   value={stats.optimized}  accent="border-cyan-400/60"    accentBg="bg-cyan-400/8"     icon={Zap}               iconColor="text-cyan-400"    delay={120} />
+                    <StatCard label="Tasks"       value={stats.tasks}      accent="border-teal-300/60"    accentBg="bg-teal-400/8"     icon={CheckCircle2}      iconColor="text-teal-300"    delay={160} />
+                    <StatCard label="Milestones"  value={stats.milestones} accent="border-yellow-400/60"  accentBg="bg-yellow-400/8"   icon={ArrowRight}        iconColor="text-yellow-400"  delay={200} />
+                    <StatCard label="Refactored"  value={stats.refactors}  accent="border-purple-400/60"  accentBg="bg-purple-400/8"   icon={RefreshCw}         iconColor="text-purple-400"  delay={240} />
+                    <StatCard label="Learnings"   value={stats.learnings}  accent="border-violet-400/60"  accentBg="bg-violet-400/8"   icon={BookOpen}          iconColor="text-violet-400"  delay={280} />
+                  </section>
+                </div>
+              )}
+              {(readOnly || heatmapOpen) && (
+                <div className="xl:w-105 shrink-0 flex flex-col">
+                  <GitHubHeatmap entries={entries} issues={issues} />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* ── In Progress + Issues panels ────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
@@ -984,69 +1099,137 @@ export default function ProjectDashboard() {
                   </p>
                 ) : (
                   <>
-                    <ul className="flex flex-col gap-2">
-                      {pagedIP.map((item, i) => (
-                        <li
-                          key={i}
-                          className="flex items-start gap-2.5 py-2 border-b border-yellow-400/10 last:border-0"
-                        >
-                          <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-slate-200 leading-snug">
-                              {item.task.title}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-1 mt-1">
-                              {item.task.priority && (
-                                <span
-                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}
-                                >
-                                  {PRIORITY_META[item.task.priority].label}
-                                </span>
-                              )}
-                              {item.task.complexity && (
-                                <span
-                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}
-                                >
-                                  {COMPLEXITY_META[item.task.complexity].label}
-                                </span>
-                              )}
-                              {(item.task.tags ?? []).map((tag) => {
-                                const s = TASK_TAG_STYLE[tag];
-                                return (
-                                  <span
-                                    key={tag}
-                                    className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
-                                  >
-                                    #{tag}
-                                  </span>
-                                );
-                              })}
-                              <span className="text-[10px] text-slate-600">
-                                started {formatDate(item.entryDate)}
-                              </span>
-                            </div>
+                    <div className="flex flex-col gap-0.5">
+
+                      {/* ── Raised Issues ── */}
+                      {inProgressIssues.length > 0 && (
+                        <>
+                          <div className="flex items-center gap-1.5 px-2 pt-1 pb-2">
+                            <AlertCircle size={10} className="text-red-400/80" />
+                            <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">Raised Issues</span>
+                            <span className="text-[9px] text-slate-700">{inProgressIssues.length}</span>
                           </div>
-                          {!readOnly && (
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                onClick={() => markTaskDone(item.task.title)}
-                                disabled={actionLoading === item.task.title}
-                                className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors disabled:opacity-40 whitespace-nowrap"
-                              >
-                                ✓ Done
-                              </button>
-                              <button
-                                onClick={() => markTaskPlanned(item.task.title)}
-                                disabled={actionLoading === item.task.title}
-                                className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors disabled:opacity-40 whitespace-nowrap"
-                              >
-                                → Keep Planning
-                              </button>
+                          {inProgressIssues.map(issue => {
+                            const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+                            const pm = PRIORITY_META[issue.priority];
+                            return (
+                              <div key={issue.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
+                                {/* Left accent dot */}
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-400/70 shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <span className="text-[9px] text-slate-600 font-medium">{issue.project}</span>
+                                    <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                                    {pm && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                                  </div>
+                                  <button onClick={() => setDetailIssue(issue)} className="text-[13px] font-medium text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors">
+                                    {issue.title}
+                                  </button>
+                                  {issue.date_started && <p className="text-[10px] text-slate-600 mt-0.5">started {issue.date_started}</p>}
+                                </div>
+                                {!readOnly && (
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button onClick={() => toggleIssueStatus(issue)} className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors whitespace-nowrap">
+                                      ✓ Resolve
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        const patch: Partial<RaisedIssue> = { status: "open", date_started: undefined };
+                                        const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+                                        if (!error) setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, ...patch } : i));
+                                      }}
+                                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap"
+                                    >
+                                      ← Open
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+
+                      {/* Section divider between raised issues and tasks */}
+                      {inProgressIssues.length > 0 && pagedIP.length > 0 && (
+                        <div className="flex items-center gap-2 px-2 pt-3 pb-2">
+                          <div className="h-px flex-1 bg-slate-800/60" />
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400/70" />
+                            <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">Tasks</span>
+                            <span className="text-[9px] text-slate-700">{pagedIP.length}</span>
+                          </div>
+                          <div className="h-px flex-1 bg-slate-800/60" />
+                        </div>
+                      )}
+                      {inProgressIssues.length === 0 && pagedIP.length > 0 && (
+                        <div className="flex items-center gap-1.5 px-2 pt-1 pb-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-yellow-400/70" />
+                          <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">Tasks</span>
+                          <span className="text-[9px] text-slate-700">{pagedIP.length}</span>
+                        </div>
+                      )}
+
+                      {/* ── Regular tasks ── */}
+                      {pagedIP.map((item, i) => {
+                        const typeKey = (item.task.type ?? "task") as keyof typeof TYPE_META;
+                        const tm = TYPE_META[typeKey] ?? TYPE_META.task;
+                        const TIcon = tm.icon;
+                        return (
+                          <div key={i} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
+                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400/80 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[9px] text-slate-600 font-medium">{item.entryProject}</span>
+                                <span className={`flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>
+                                  <TIcon size={8} />{tm.label}
+                                </span>
+                                {item.task.priority && (
+                                  <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}>
+                                    {PRIORITY_META[item.task.priority].label}
+                                  </span>
+                                )}
+                                {item.task.complexity && (
+                                  <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${COMPLEXITY_META[item.task.complexity].text} ${COMPLEXITY_META[item.task.complexity].bg}`}>
+                                    {COMPLEXITY_META[item.task.complexity].label}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[13px] font-medium text-slate-200 leading-snug">{item.task.title}</p>
+                              <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                {(item.task.tags ?? []).map((tag) => {
+                                  const s = TASK_TAG_STYLE[tag];
+                                  return (
+                                    <span key={tag} className={`text-[9px] font-medium px-1.5 py-px rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-500 bg-slate-800 border-slate-700"}`}>
+                                      #{tag}
+                                    </span>
+                                  );
+                                })}
+                                <span className="text-[10px] text-slate-600">started {formatDate(item.entryDate)}</span>
+                              </div>
                             </div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
+                            {!readOnly && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={() => markTaskDone(item.task.title)}
+                                  disabled={actionLoading === item.task.title}
+                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40 whitespace-nowrap"
+                                >
+                                  ✓ Done
+                                </button>
+                                <button
+                                  onClick={() => markTaskPlanned(item.task.title)}
+                                  disabled={actionLoading === item.task.title}
+                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors disabled:opacity-40 whitespace-nowrap"
+                                >
+                                  → Plan
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                     {ipTotalPages > 1 && (
                       <div className="flex items-center justify-between pt-2 border-t border-yellow-400/10">
                         <button
@@ -1072,52 +1255,6 @@ export default function ProjectDashboard() {
                         >
                           Next →
                         </button>
-                      </div>
-                    )}
-                    {/* In-progress raised issues */}
-                    {inProgressIssues.length > 0 && (
-                      <div className="flex flex-col gap-2 pt-2 border-t border-yellow-400/10">
-                        <div className="flex items-center gap-1.5">
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-red-400/70">Raised Issues</p>
-                        </div>
-                        {inProgressIssues.map(issue => {
-                          const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
-                          const pm = PRIORITY_META[issue.priority];
-                          const hasMedia = (issue.media?.length ?? 0) > 0 || (issue.compare?.length ?? 0) > 0;
-                          return (
-                            <li key={issue.id} className="flex items-start gap-2.5 py-2 border-b border-yellow-400/10 last:border-0 list-none">
-                              <AlertCircle size={12} className="mt-1 text-red-400 shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <button
-                                  onClick={() => setDetailIssue(issue)}
-                                  className="text-sm text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors"
-                                >
-                                  {issue.title}
-                                </button>
-                                {issue.description && (
-                                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>
-                                )}
-                                <div className="flex flex-wrap items-center gap-1 mt-1">
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
-                                  {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
-                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
-                                  {hasMedia && <span className="text-[9px] text-slate-500 flex items-center gap-0.5"><ImageIcon size={9} /> media</span>}
-                                  {issue.date_started && <span className="text-[10px] text-slate-600">started {issue.date_started}</span>}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button onClick={() => setDetailIssue(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap">
-                                  + Media
-                                </button>
-                                {!readOnly && (
-                                  <button onClick={() => toggleIssueStatus(issue)} className="text-[11px] px-2 py-1 rounded-lg border border-emerald-400/30 text-emerald-300 hover:bg-emerald-400/10 transition-colors whitespace-nowrap">
-                                    ✓ Resolve
-                                  </button>
-                                )}
-                              </div>
-                            </li>
-                          );
-                        })}
                       </div>
                     )}
                   </>
@@ -1259,8 +1396,10 @@ export default function ProjectDashboard() {
               (backlogPage - 1) * BL_PER_PAGE,
               backlogPage * BL_PER_PAGE,
             );
+            const hasBacklogFilters = backlogPriorityFilter !== "all" || backlogComplexityFilter !== "all" || backlogTypeFilter !== "all" || backlogTagFilter !== "all";
             return (
               <section className="flex flex-col gap-3 p-4 rounded-2xl border border-blue-400/20 bg-blue-400/5">
+                {/* Header row */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
@@ -1271,38 +1410,94 @@ export default function ProjectDashboard() {
                       {filteredPlannedItems.length}
                     </span>
                   </div>
-                  {!readOnly && (
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={() => {
-                        setQuickAdd({
-                          title: "",
-                          priority: "",
-                          complexity: "",
-                          tags: [],
-                        });
-                        setQuickAddOpen(true);
-                      }}
-                      className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
+                      onClick={() => setBacklogFilterOpen(o => !o)}
+                      className={`flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border transition-colors ${backlogFilterOpen || hasBacklogFilters ? "border-blue-400/40 bg-blue-400/10 text-blue-300" : "border-slate-800 text-slate-500 hover:text-slate-300"}`}
+                      title="Filter planning tasks"
                     >
-                      + Add planned task
+                      <Filter size={11} />
+                      Filters
+                      {hasBacklogFilters && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 ml-0.5" />}
                     </button>
-                  )}
+                    {!readOnly && (
+                      <button
+                        onClick={() => {
+                          setQuickAdd({ title: "", priority: "", complexity: "", type: "", tags: [] });
+                          setQuickAddMedia([]);
+                          setQuickAddCompare([]);
+                          setQuickAddOpen(true);
+                        }}
+                        className="text-[11px] text-blue-400/70 hover:text-blue-400 transition-colors flex items-center gap-1"
+                      >
+                        + Add task
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {["all", ...TASK_TAGS].map((tag) => (
-                    <button
-                      key={tag}
-                      onClick={() => setBacklogTagFilter(tag)}
-                      className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
-                        backlogTagFilter === tag
-                          ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
-                          : "border-slate-800 text-slate-500 hover:text-slate-400"
-                      }`}
-                    >
-                      {tag === "all" ? "All" : `#${tag}`}
-                    </button>
-                  ))}
-                </div>
+
+                {/* Filter panel */}
+                {backlogFilterOpen && (
+                  <div className="flex flex-col gap-2 p-3 rounded-xl border border-blue-400/15 bg-slate-900/60">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={backlogPriorityFilter}
+                        onChange={e => setBacklogPriorityFilter(e.target.value)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
+                      >
+                        <option value="all">All Priorities</option>
+                        <option value="urgent">Urgent</option>
+                        <option value="major">Major</option>
+                        <option value="minor">Minor</option>
+                      </select>
+                      <select
+                        value={backlogComplexityFilter}
+                        onChange={e => setBacklogComplexityFilter(e.target.value)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
+                      >
+                        <option value="all">All Severity</option>
+                        <option value="simple">Simple</option>
+                        <option value="hard">Hard</option>
+                        <option value="complex">Complex</option>
+                      </select>
+                      <select
+                        value={backlogTypeFilter}
+                        onChange={e => setBacklogTypeFilter(e.target.value)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
+                      >
+                        <option value="all">All Types</option>
+                        {Object.entries(TYPE_META).map(([k, v]) => (
+                          <option key={k} value={k}>{v.label}</option>
+                        ))}
+                      </select>
+                      {hasBacklogFilters && (
+                        <button
+                          onClick={() => { setBacklogPriorityFilter("all"); setBacklogComplexityFilter("all"); setBacklogTypeFilter("all"); setBacklogTagFilter("all"); }}
+                          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors"
+                        >
+                          <X size={10} /> Clear
+                        </button>
+                      )}
+                    </div>
+                    {/* Tag chips */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {["all", ...TASK_TAGS].map((tag) => (
+                        <button
+                          key={tag}
+                          onClick={() => setBacklogTagFilter(tag)}
+                          className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                            backlogTagFilter === tag
+                              ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
+                              : "border-slate-800 text-slate-500 hover:text-slate-400"
+                          }`}
+                        >
+                          {tag === "all" ? "All Tags" : `#${tag}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {filteredPlannedItems.length === 0 ? (
                   <p className="text-xs text-slate-600 py-2">
                     No planned tasks yet.
@@ -1344,7 +1539,7 @@ export default function ProjectDashboard() {
                                   }
                                 : undefined
                             }
-                            className={`flex items-center gap-2.5 py-2 px-1 rounded-lg border transition-colors ${
+                            className={`flex items-start gap-2.5 py-2 px-1 rounded-lg border transition-colors ${
                               !readOnly &&
                               dragOverIdx === realIdx &&
                               dragIdx !== realIdx
@@ -1353,45 +1548,119 @@ export default function ProjectDashboard() {
                             } border-b border-b-blue-400/10 last:border-b-0`}
                           >
                             {!readOnly && (
-                              <span className={`shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}>⠿</span>
+                              <span className={`mt-1.5 shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}>⠿</span>
                             )}
                             {editingBacklogTask?.task.title === item.task.title ? (
                               /* ── Inline edit form ── */
-                              <div className="flex-1 flex flex-col gap-1.5">
+                              <div className="flex-1 flex flex-col gap-2">
+                                {/* Title */}
                                 <input
                                   autoFocus
                                   value={backlogEditForm.title}
                                   onChange={(e) => setBacklogEditForm((f) => ({ ...f, title: e.target.value }))}
-                                  onKeyDown={(e) => { if (e.key === "Enter") saveBacklogEdit(); if (e.key === "Escape") setEditingBacklogTask(null); }}
+                                  onKeyDown={(e) => { if (e.key === "Escape") setEditingBacklogTask(null); }}
                                   className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-emerald-500/60"
                                 />
-                                <div className="flex gap-1.5">
-                                  <select
-                                    value={backlogEditForm.priority}
-                                    onChange={(e) => setBacklogEditForm((f) => ({ ...f, priority: e.target.value }))}
-                                    className="flex-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
-                                  >
+                                {/* Project */}
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 shrink-0">Project</span>
+                                  {(["VC+", "VC+ CMS"] as const).map((p) => (
+                                    <button key={p} type="button" onClick={() => setBacklogEditForm((f) => ({ ...f, project: p }))}
+                                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${backlogEditForm.project === p ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}>
+                                      {p}
+                                    </button>
+                                  ))}
+                                </div>
+                                {/* Type + Priority + Severity */}
+                                <div className="grid grid-cols-3 gap-1.5">
+                                  <select value={backlogEditForm.type} onChange={(e) => setBacklogEditForm((f) => ({ ...f, type: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none">
+                                    <option value="">Type</option>
+                                    {Object.entries(TYPE_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                  </select>
+                                  <select value={backlogEditForm.priority} onChange={(e) => setBacklogEditForm((f) => ({ ...f, priority: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none">
                                     <option value="">Priority</option>
                                     <option value="urgent">Urgent</option>
                                     <option value="major">Major</option>
                                     <option value="minor">Minor</option>
                                   </select>
-                                  <select
-                                    value={backlogEditForm.complexity}
-                                    onChange={(e) => setBacklogEditForm((f) => ({ ...f, complexity: e.target.value }))}
-                                    className="flex-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none"
-                                  >
-                                    <option value="">Complexity</option>
+                                  <select value={backlogEditForm.complexity} onChange={(e) => setBacklogEditForm((f) => ({ ...f, complexity: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-[11px] px-2 py-1 outline-none">
+                                    <option value="">Severity</option>
                                     <option value="simple">Simple</option>
                                     <option value="hard">Hard</option>
                                     <option value="complex">Complex</option>
                                   </select>
                                 </div>
+                                {/* Images */}
+                                <div className="flex flex-col gap-1.5">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Images</span>
+                                    <label className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-blue-400 transition-colors cursor-pointer">
+                                      <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setBacklogEditMedia((d) => [...d, { file: f, preview: URL.createObjectURL(f), caption: "" }]); }} />
+                                      <Plus size={10} /> Add image
+                                    </label>
+                                  </div>
+                                  {backlogEditMedia.length > 0 && (
+                                    <div className={`grid gap-1.5 ${backlogEditMedia.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                                      {backlogEditMedia.map((m, mi) => (
+                                        <div key={mi} className="relative group rounded-lg overflow-hidden border border-slate-800">
+                                          <img src={m.preview} alt="" className="w-full h-20 object-cover" />
+                                          <div className="absolute inset-x-0 bottom-0 bg-slate-900/80 px-1.5 py-0.5 flex items-center gap-1">
+                                            <input value={m.caption} onChange={(e) => setBacklogEditMedia((d) => d.map((x, j) => j === mi ? { ...x, caption: e.target.value } : x))} placeholder="Caption…" className="flex-1 bg-transparent text-[11px] text-slate-300 outline-none placeholder:text-slate-600" />
+                                            <button onClick={() => setBacklogEditMedia((d) => d.filter((_, j) => j !== mi))} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={10} /></button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                {/* Before / After */}
+                                <div className="flex flex-col gap-1.5">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Before / After</span>
+                                    <button onClick={() => setBacklogEditCompare((d) => [...d, { label: "", before: { file: null, preview: "", note: "" }, after: { file: null, preview: "", note: "" } }])} className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-blue-400 transition-colors">
+                                      <Plus size={10} /> Add comparison
+                                    </button>
+                                  </div>
+                                  {backlogEditCompare.map((c, ci) => (
+                                    <div key={ci} className="rounded-xl border border-slate-800 bg-slate-950/40 p-2.5 flex flex-col gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <input value={c.label} onChange={(e) => setBacklogEditCompare((d) => d.map((x, j) => j === ci ? { ...x, label: e.target.value } : x))} placeholder="Label (optional)" className="flex-1 rounded bg-transparent border-b border-slate-800 text-[11px] text-slate-300 outline-none py-0.5 placeholder:text-slate-700" />
+                                        <button onClick={() => setBacklogEditCompare((d) => d.filter((_, j) => j !== ci))} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={11} /></button>
+                                      </div>
+                                      <div className="grid grid-cols-2 gap-2">
+                                        {(["before", "after"] as const).map((side) => {
+                                          const slot = c[side];
+                                          return (
+                                            <div key={side} className="flex flex-col gap-1">
+                                              <p className="text-[9px] uppercase tracking-widest text-slate-600 font-bold">{side}</p>
+                                              {slot.preview ? (
+                                                <div className="relative group rounded-lg overflow-hidden border border-slate-800">
+                                                  <img src={slot.preview} alt={side} className="w-full h-16 object-cover" />
+                                                  <label className="absolute inset-0 flex items-center justify-center bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                                    <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setBacklogEditCompare((d) => d.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x)); }} />
+                                                    <ImageIcon size={13} className="text-slate-300" />
+                                                  </label>
+                                                </div>
+                                              ) : (
+                                                <label className="flex flex-col items-center justify-center h-16 rounded-lg border border-dashed border-slate-700 text-slate-600 hover:border-blue-700/50 hover:text-blue-400 transition-colors cursor-pointer">
+                                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setBacklogEditCompare((d) => d.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x)); }} />
+                                                  <ImageIcon size={13} /><span className="text-[10px] mt-0.5">Upload</span>
+                                                </label>
+                                              )}
+                                              <input value={slot.note} onChange={(e) => setBacklogEditCompare((d) => d.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], note: e.target.value } } : x))} placeholder="Note…" className="text-[11px] text-slate-400 bg-transparent border-b border-slate-800/60 outline-none py-0.5 placeholder:text-slate-700" />
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                                {/* Actions */}
                                 <div className="flex gap-1.5">
-                                  <button onClick={saveBacklogEdit} className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors">
-                                    <Save size={10} /> Save
+                                  <button onClick={saveBacklogEdit} disabled={!backlogEditForm.title.trim() || backlogEditSaving} className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors disabled:opacity-50">
+                                    <Save size={10} /> {backlogEditSaving ? "Saving…" : "Save"}
                                   </button>
-                                  <button onClick={() => setEditingBacklogTask(null)} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors">
+                                  <button onClick={() => { setEditingBacklogTask(null); setBacklogEditMedia([]); setBacklogEditCompare([]); }} className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 transition-colors">
                                     Cancel
                                   </button>
                                 </div>
@@ -1400,8 +1669,14 @@ export default function ProjectDashboard() {
                               /* ── Normal display ── */
                               <>
                                 <div className="flex-1 min-w-0">
+                                  <span className="text-[9px] text-slate-600 font-medium tracking-wide">{item.entryProject}</span>
                                   <p className="text-sm text-slate-300 leading-snug">{item.task.title}</p>
                                   <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                    {item.task.type && (() => {
+                                      const tm = TYPE_META[item.task.type];
+                                      const TIcon = tm.icon;
+                                      return <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide flex items-center gap-0.5 ${tm.text} ${tm.bg}`}><TIcon size={9} /> {tm.label}</span>;
+                                    })()}
                                     {item.task.priority && (
                                       <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}>
                                         {PRIORITY_META[item.task.priority].label}
@@ -1421,11 +1696,41 @@ export default function ProjectDashboard() {
                                       );
                                     })}
                                   </div>
+                                  {/* Task media thumbnails */}
+                                  {item.task.media && item.task.media.length > 0 && (
+                                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                      {item.task.media.slice(0, 4).map((m, mi) => (
+                                        <img
+                                          key={mi}
+                                          src={m.src}
+                                          alt={m.caption ?? ""}
+                                          onClick={() => setZoomSrc(m.src)}
+                                          className="w-12 h-9 object-cover rounded border border-slate-700 cursor-zoom-in hover:border-blue-400/40 transition-colors"
+                                        />
+                                      ))}
+                                      {item.task.media.length > 4 && (
+                                        <span className="text-[9px] text-slate-500">+{item.task.media.length - 4}</span>
+                                      )}
+                                    </div>
+                                  )}
+                                  {/* Compare blocks */}
+                                  {item.task.compare && item.task.compare.length > 0 && (
+                                    <div className="mt-2 flex flex-col gap-2">
+                                      {item.task.compare.map((pair, ci) => (
+                                        <CompareBlock key={ci} pair={pair} onImageClick={setZoomSrc} onCompareZoom={setCompareZoom} />
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                                 {!readOnly && (
-                                  <div className="flex items-center gap-1 shrink-0">
+                                  <div className="flex items-center gap-1 shrink-0 mt-0.5">
                                     <button
-                                      onClick={() => { setEditingBacklogTask(item); setBacklogEditForm({ title: item.task.title, priority: item.task.priority ?? "", complexity: item.task.complexity ?? "" }); }}
+                                      onClick={() => {
+                                        setEditingBacklogTask(item);
+                                        setBacklogEditForm({ title: item.task.title, priority: item.task.priority ?? "", complexity: item.task.complexity ?? "", type: item.task.type ?? "", project: item.entryProject });
+                                        setBacklogEditMedia((item.task.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" })));
+                                        setBacklogEditCompare((item.task.compare ?? []).map(c => ({ label: c.label ?? "", before: { file: null, preview: c.before.src, note: c.before.note }, after: { file: null, preview: c.after.src, note: c.after.note } })));
+                                      }}
                                       className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
                                       title="Edit task"
                                     >
@@ -1653,6 +1958,7 @@ export default function ProjectDashboard() {
                     onView={() => setViewingEntry(entry)}
                     onEdit={() => setEditingEntry(entry)}
                     onImageClick={setZoomSrc}
+                    onCompareZoom={setCompareZoom}
                     raisedIssues={issuesByDate.get(entry.date) ?? []}
                     onViewIssue={setDetailIssue}
                     onResolveIssue={toggleIssueStatus}
@@ -1709,114 +2015,273 @@ export default function ProjectDashboard() {
           onClick={() => setZoomSrc(null)}
           className="fixed inset-0 z-60 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4"
         >
-          <button
-            onClick={() => setZoomSrc(null)}
-            className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors"
-          >
+          <button onClick={() => setZoomSrc(null)} className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors">
             <X size={22} />
           </button>
-          <img
-            src={zoomSrc}
-            onClick={(e) => e.stopPropagation()}
-            className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
-            alt="Zoomed"
-          />
+          <img src={zoomSrc} onClick={(e) => e.stopPropagation()} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" alt="Zoomed" />
+        </div>
+      )}
+
+      {/* ── Compare side-by-side lightbox ── */}
+      {compareZoom && (
+        <div
+          onClick={() => setCompareZoom(null)}
+          className="fixed inset-0 z-60 bg-black/95 backdrop-blur-sm flex items-center justify-center p-6"
+        >
+          <button onClick={() => setCompareZoom(null)} className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors">
+            <X size={22} />
+          </button>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-5xl flex flex-col gap-4">
+            {compareZoom.label && (
+              <p className="text-center text-[11px] font-bold uppercase tracking-[0.25em] text-slate-400">{compareZoom.label}</p>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-orange-400 text-center">Before</span>
+                <img src={compareZoom.before.src} alt="Before" className="w-full max-h-[70vh] object-contain rounded-xl border border-slate-700 shadow-2xl" />
+                {compareZoom.before.note && <p className="text-[11px] text-slate-400 text-center leading-snug">{compareZoom.before.note}</p>}
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 text-center">After</span>
+                <img src={compareZoom.after.src} alt="After" className="w-full max-h-[70vh] object-contain rounded-xl border border-slate-700 shadow-2xl" />
+                {compareZoom.after.note && <p className="text-[11px] text-slate-400 text-center leading-snug">{compareZoom.after.note}</p>}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       {quickAddOpen && (
         <>
           <div
-            onClick={() => setQuickAddOpen(false)}
+            onClick={() => { setQuickAddOpen(false); setQuickAddMedia([]); setQuickAddCompare([]); }}
             className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm"
           />
-          <div className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-5 flex flex-col gap-4">
-            <div className="flex items-center justify-between">
+          <div className="fixed z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xl max-h-[90vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 shrink-0">
               <span className="text-[11px] font-bold tracking-[0.25em] uppercase text-blue-400">
                 Add to Plans
               </span>
               <button
-                onClick={() => setQuickAddOpen(false)}
+                onClick={() => { setQuickAddOpen(false); setQuickAddMedia([]); setQuickAddCompare([]); }}
                 className="text-slate-500 hover:text-slate-300 transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
-            <input
-              autoFocus
-              value={quickAdd.title}
-              onChange={(e) =>
-                setQuickAdd((d) => ({ ...d, title: e.target.value }))
-              }
-              onKeyDown={(e) => e.key === "Enter" && handleQuickAddSave()}
-              placeholder="Task title..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-700/60 placeholder:text-slate-600 transition-colors"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <select
-                value={quickAdd.priority}
-                onChange={(e) =>
-                  setQuickAdd((d) => ({ ...d, priority: e.target.value }))
-                }
-                className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-blue-700/60 transition-colors"
-              >
-                <option value="">Priority</option>
-                <option value="urgent">🔴 Urgent</option>
-                <option value="major">🟡 Major</option>
-                <option value="minor">🔵 Minor</option>
-              </select>
-              <select
-                value={quickAdd.complexity}
-                onChange={(e) =>
-                  setQuickAdd((d) => ({ ...d, complexity: e.target.value }))
-                }
-                className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-blue-700/60 transition-colors"
-              >
-                <option value="">Complexity</option>
-                <option value="simple">Simple</option>
-                <option value="hard">Hard</option>
-                <option value="complex">Complex</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                Tags
-              </span>
-              {TASK_TAGS.map((tag) => {
-                const active = quickAdd.tags.includes(tag);
-                const s = TASK_TAG_STYLE[tag];
-                return (
+
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4">
+              <input
+                autoFocus
+                value={quickAdd.title}
+                onChange={(e) => setQuickAdd((d) => ({ ...d, title: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && handleQuickAddSave()}
+                placeholder="Task title..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-700/60 placeholder:text-slate-600 transition-colors"
+              />
+
+              {/* Project */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 shrink-0">Project</span>
+                {(["VC+", "VC+ CMS"] as const).map((p) => (
                   <button
-                    key={tag}
+                    key={p}
                     type="button"
-                    onClick={() =>
-                      setQuickAdd((d) => ({
-                        ...d,
-                        tags: active
-                          ? d.tags.filter((t) => t !== tag)
-                          : [...d.tags, tag],
-                      }))
-                    }
-                    className={`text-[10px] px-2.5 py-0.5 rounded-full border transition-colors ${
-                      active && s
-                        ? `${s.text} ${s.bg} ${s.border}`
-                        : active
-                          ? "border-blue-400/40 bg-blue-400/10 text-blue-300"
-                          : "border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-400"
+                    onClick={() => setQuickAddProject(p)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                      quickAddProject === p
+                        ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
+                        : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                     }`}
                   >
-                    #{tag}
+                    {p}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+
+              {/* Type + Priority + Severity */}
+              <div className="grid grid-cols-3 gap-2">
+                <select
+                  value={quickAdd.type}
+                  onChange={(e) => setQuickAdd((d) => ({ ...d, type: e.target.value }))}
+                  className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-blue-700/60 transition-colors"
+                >
+                  <option value="">Type</option>
+                  {Object.entries(TYPE_META).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+                <select
+                  value={quickAdd.priority}
+                  onChange={(e) => setQuickAdd((d) => ({ ...d, priority: e.target.value }))}
+                  className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-blue-700/60 transition-colors"
+                >
+                  <option value="">Priority</option>
+                  <option value="urgent">🔴 Urgent</option>
+                  <option value="major">🟡 Major</option>
+                  <option value="minor">🔵 Minor</option>
+                </select>
+                <select
+                  value={quickAdd.complexity}
+                  onChange={(e) => setQuickAdd((d) => ({ ...d, complexity: e.target.value }))}
+                  className="bg-slate-950 border border-slate-800 rounded-md px-2 py-1.5 text-xs text-slate-300 outline-none focus:border-blue-700/60 transition-colors"
+                >
+                  <option value="">Severity</option>
+                  <option value="simple">Simple</option>
+                  <option value="hard">Hard</option>
+                  <option value="complex">Complex</option>
+                </select>
+              </div>
+
+              {/* Tags */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Tags</span>
+                {TASK_TAGS.map((tag) => {
+                  const active = quickAdd.tags.includes(tag);
+                  const s = TASK_TAG_STYLE[tag];
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() =>
+                        setQuickAdd((d) => ({
+                          ...d,
+                          tags: active ? d.tags.filter((t) => t !== tag) : [...d.tags, tag],
+                        }))
+                      }
+                      className={`text-[10px] px-2.5 py-0.5 rounded-full border transition-colors ${
+                        active && s ? `${s.text} ${s.bg} ${s.border}` : active ? "border-blue-400/40 bg-blue-400/10 text-blue-300" : "border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-400"
+                      }`}
+                    >
+                      #{tag}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Images */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Images</p>
+                  <label className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-blue-400 transition-colors cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        setQuickAddMedia((d) => [...d, { file: f, preview: URL.createObjectURL(f), caption: "" }]);
+                      }}
+                    />
+                    <Plus size={11} /> Add image
+                  </label>
+                </div>
+                {quickAddMedia.length > 0 && (
+                  <div className={`grid gap-2 ${quickAddMedia.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                    {quickAddMedia.map((m, i) => (
+                      <div key={i} className="relative group rounded-lg overflow-hidden border border-slate-800">
+                        <img src={m.preview} alt="" className="w-full h-28 object-cover" />
+                        <div className="absolute inset-x-0 bottom-0 bg-slate-900/80 px-2 py-1 flex items-center gap-1">
+                          <input
+                            value={m.caption}
+                            onChange={(e) => setQuickAddMedia((d) => d.map((x, j) => j === i ? { ...x, caption: e.target.value } : x))}
+                            placeholder="Caption…"
+                            className="flex-1 bg-transparent text-[11px] text-slate-300 outline-none placeholder:text-slate-600"
+                          />
+                          <button
+                            onClick={() => setQuickAddMedia((d) => d.filter((_, j) => j !== i))}
+                            className="text-slate-600 hover:text-red-400 transition-colors"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Before / After Compare */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Before / After</p>
+                  <button
+                    onClick={() => setQuickAddCompare((d) => [...d, { label: "", before: { file: null, preview: "", note: "" }, after: { file: null, preview: "", note: "" } }])}
+                    className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-blue-400 transition-colors"
+                  >
+                    <Plus size={11} /> Add comparison
+                  </button>
+                </div>
+                {quickAddCompare.map((c, i) => (
+                  <div key={i} className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={c.label}
+                        onChange={(e) => setQuickAddCompare((d) => d.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
+                        placeholder="Label (optional)"
+                        className="flex-1 rounded bg-transparent border-b border-slate-800 text-[11px] text-slate-300 outline-none py-0.5 placeholder:text-slate-700"
+                      />
+                      <button
+                        onClick={() => setQuickAddCompare((d) => d.filter((_, j) => j !== i))}
+                        className="text-slate-600 hover:text-red-400 transition-colors"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(["before", "after"] as const).map((side) => {
+                        const slot = c[side];
+                        return (
+                          <div key={side} className="flex flex-col gap-1">
+                            <p className="text-[9px] uppercase tracking-widest text-slate-600 font-bold">{side}</p>
+                            {slot.preview ? (
+                              <div className="relative group rounded-lg overflow-hidden border border-slate-800">
+                                <img src={slot.preview} alt={side} className="w-full h-20 object-cover" />
+                                <label className="absolute inset-0 flex items-center justify-center bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                                    const f = e.target.files?.[0]; if (!f) return;
+                                    setQuickAddCompare((d) => d.map((x, j) => j === i ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x));
+                                  }} />
+                                  <ImageIcon size={14} className="text-slate-300" />
+                                </label>
+                              </div>
+                            ) : (
+                              <label className="flex flex-col items-center justify-center h-20 rounded-lg border border-dashed border-slate-700 text-slate-600 hover:border-blue-700/50 hover:text-blue-400 transition-colors cursor-pointer">
+                                <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                                  const f = e.target.files?.[0]; if (!f) return;
+                                  setQuickAddCompare((d) => d.map((x, j) => j === i ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x));
+                                }} />
+                                <ImageIcon size={14} /><span className="text-[10px] mt-1">Upload</span>
+                              </label>
+                            )}
+                            <input
+                              value={slot.note}
+                              onChange={(e) => setQuickAddCompare((d) => d.map((x, j) => j === i ? { ...x, [side]: { ...x[side], note: e.target.value } } : x))}
+                              placeholder="Note…"
+                              className="text-[11px] text-slate-400 bg-transparent border-b border-slate-800/60 outline-none py-0.5 placeholder:text-slate-700"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <button
-              onClick={handleQuickAddSave}
-              disabled={!quickAdd.title.trim() || quickAddSaving}
-              className="w-full rounded-xl bg-blue-500/20 border border-blue-500/40 text-blue-300 text-sm font-semibold py-2.5 hover:bg-blue-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {quickAddSaving ? "Saving…" : "Add to Backlog"}
-            </button>
+
+            {/* Footer */}
+            <div className="px-5 py-3 border-t border-slate-800 shrink-0">
+              <button
+                onClick={handleQuickAddSave}
+                disabled={!quickAdd.title.trim() || quickAddSaving}
+                className="w-full rounded-xl bg-blue-500/20 border border-blue-500/40 text-blue-300 text-sm font-semibold py-2.5 hover:bg-blue-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {quickAddSaving ? "Saving…" : "Add to Backlog"}
+              </button>
+            </div>
           </div>
         </>
       )}
@@ -1829,6 +2294,7 @@ export default function ProjectDashboard() {
           setViewingEntry(null);
         }}
         onImageClick={setZoomSrc}
+        onCompareZoom={setCompareZoom}
         readOnly={readOnly}
       />
 
@@ -1856,8 +2322,13 @@ export default function ProjectDashboard() {
         onClose={() => setCompletedOpen(false)}
         entries={entries}
         issues={issues}
+        onEditEntry={(entryId) => {
+          setCompletedOpen(false);
+          const entry = entries.find(e => e.id === entryId);
+          if (entry) setEditingEntry(entry);
+        }}
       />
-      <CompletionToast toast={completionToast} onClose={() => setCompletionToast(null)} />
+      <CompletionToast toasts={toasts} onClose={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
       {detailIssue && (
         <IssueDetailModal
           issue={detailIssue}
@@ -1880,6 +2351,7 @@ export default function ProjectDashboard() {
               entryId: `issue-${i.id}`,
               entryTitle: i.title,
               entryDate: i.date_started ?? i.date_raised,
+              entryProject: i.project,
               task: {
                 title: i.title,
                 type: "bugfix" as const,
@@ -1987,6 +2459,21 @@ export default function ProjectDashboard() {
         }
         @keyframes spinCW  { from { transform: rotate(0deg)   } to { transform: rotate(360deg)  } }
         @keyframes spinCCW { from { transform: rotate(360deg) } to { transform: rotate(0deg)    } }
+        @keyframes drainWidth { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+        @keyframes fireGlow {
+          0%, 100% { box-shadow: 0 0 12px 2px rgba(251,146,60,0.3), 0 0 32px 4px rgba(251,191,36,0.12), inset 0 0 12px rgba(251,146,60,0.04); }
+          50%       { box-shadow: 0 0 22px 5px rgba(251,146,60,0.5), 0 0 50px 8px rgba(251,191,36,0.18), inset 0 0 18px rgba(251,146,60,0.07); }
+        }
+        @keyframes orbPulse {
+          0%, 100% { opacity: 0.5; transform: scale(1); }
+          50%       { opacity: 1;   transform: scale(1.15); }
+        }
+        @keyframes flicker {
+          0%, 100% { transform: scale(1) rotate(-3deg); }
+          25%  { transform: scale(1.15) rotate(3deg); }
+          50%  { transform: scale(0.92) rotate(-5deg); }
+          75%  { transform: scale(1.08) rotate(4deg); }
+        }
         .animate-fade-in    { animation: fadeIn   0.6s ease-out both; }
         .animate-fade-in-up { animation: fadeInUp 0.6s ease-out both; }
         .ring-cw-120  { animation: spinCW  120s linear infinite; }
@@ -1996,6 +2483,10 @@ export default function ProjectDashboard() {
         .ring-cw-180  { animation: spinCW  180s linear infinite; }
         .ring-ccw-140 { animation: spinCCW 140s linear infinite; }
         .ring-cw-300  { animation: spinCW  300s linear infinite; }
+        .toast-fire   { animation: fadeInUp 0.4s cubic-bezier(0.16,1,0.3,1) both, fireGlow 2.8s ease-in-out infinite; }
+        .fire-orb-pulse { animation: orbPulse 2s ease-in-out infinite; }
+        .fire-emoji   { display: inline-block; animation: flicker 1s ease-in-out infinite; }
+        .hm-cell      { fill: var(--hmc, #1a2332) !important; }
       `}</style>
     </div>
   );
@@ -2273,6 +2764,9 @@ function ProfileButton({
           className={`text-[11px] leading-tight ${readOnly ? "text-amber-400/80" : "text-emerald-400/80"}`}
         >
           {readOnly ? "Read Only" : "Wizard Mode"}
+        </span>
+        <span className="text-[9px] text-slate-500 leading-tight mt-0.5">
+          Click here to see detailed summary
         </span>
       </span>
     </button>
@@ -2682,12 +3176,172 @@ function ProfilePanel({
 }
 
 // ════════════════════════════════════════════════════════════════════
+// Activity heatmap — div-based (backgroundColor is CSS-override-proof)
+// ════════════════════════════════════════════════════════════════════
+function GitHubHeatmap({ entries, issues }: { entries: Entry[]; issues: RaisedIssue[] }) {
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(currentYear);
+
+  function localIso(d: Date) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const e of entries) {
+      const done = e.tasks.filter(t => t.status === "done").length;
+      if (done > 0) c[e.date] = (c[e.date] ?? 0) + done;
+    }
+    for (const i of issues) {
+      if (i.status === "resolved" && i.date_resolved) {
+        c[i.date_resolved] = (c[i.date_resolved] ?? 0) + 1;
+      }
+    }
+    return c;
+  }, [entries, issues]);
+
+  // Build a full-year grid starting from the Sunday on/before Jan 1
+  const { cells, colCount, monthLabels } = useMemo(() => {
+    const today = new Date();
+    // Sunday on or before Jan 1
+    const jan1 = new Date(year, 0, 1);
+    const cursor = new Date(jan1);
+    cursor.setDate(cursor.getDate() - cursor.getDay());
+    // Saturday on or after Dec 31
+    const dec31 = new Date(year, 11, 31);
+    const gridEnd = new Date(dec31);
+    gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()));
+
+    const cs: { date: string; count: number; col: number; row: number; inYear: boolean; future: boolean }[] = [];
+    const seen = new Set<string>();
+    const moLabels: { col: number; label: string }[] = [];
+    let col = 0;
+    const c2 = new Date(cursor);
+    while (c2 <= gridEnd) {
+      const iso = localIso(c2);
+      const row = c2.getDay();
+      const inYear = c2.getFullYear() === year;
+      cs.push({ date: iso, count: inYear ? (counts[iso] ?? 0) : 0, col, row, inYear, future: c2 > today });
+      // month label at start of each month (row 0 of that week)
+      if (row === 0) {
+        const mo = iso.slice(0, 7);
+        if (!seen.has(mo) && inYear) {
+          seen.add(mo);
+          moLabels.push({ col, label: new Date(year, c2.getMonth(), 1).toLocaleDateString("en-US", { month: "short" }) });
+        }
+      }
+      if (row === 6) col++;
+      c2.setDate(c2.getDate() + 1);
+    }
+    return { cells: cs, colCount: col + 1, monthLabels: moLabels };
+  }, [counts, year]);
+
+  const CELL = 11;
+  const GAP  = 2;
+  const STEP = CELL + GAP; // 13px per col/row
+
+  function colorFor(n: number, inYear: boolean): string {
+    if (!inYear) return "#0d1117"; // outside year — near-invisible
+    if (n === 0) return "#1a2332";
+    if (n === 1) return "#14532d";
+    if (n <= 3)  return "#15803d";
+    if (n <= 6)  return "#22c55e";
+    return "#4ade80";
+  }
+
+  const totalDone = useMemo(() => cells.filter(c => c.inYear).reduce((s, c) => s + c.count, 0), [cells]);
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm p-4 flex flex-col gap-3 flex-1">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <GitCommitHorizontal size={13} className="text-emerald-400" />
+          <span className="text-[11px] font-bold tracking-widest uppercase text-slate-400">Activity</span>
+          <span className="text-[10px] text-slate-600">{totalDone} task{totalDone !== 1 ? "s" : ""}</span>
+        </div>
+        {/* Year navigation */}
+        <div className="flex items-center gap-1">
+          <button onClick={() => setYear(y => y - 1)} className="p-1 rounded text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition-colors">
+            <ChevronDown size={12} style={{ transform: "rotate(90deg)" }} />
+          </button>
+          <span className="text-[11px] font-semibold text-slate-400 px-1 min-w-10 text-center">{year}</span>
+          <button onClick={() => setYear(y => y + 1)} disabled={year >= currentYear} className="p-1 rounded text-slate-600 hover:text-slate-300 hover:bg-slate-800 transition-colors disabled:opacity-25 disabled:cursor-not-allowed">
+            <ChevronDown size={12} style={{ transform: "rotate(-90deg)" }} />
+          </button>
+        </div>
+      </div>
+
+      {/* Grid area — grows to fill available height, grid centered vertically */}
+      <div className="flex-1 flex items-center">
+        <div className="w-full">
+          <div style={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
+            {/* Day labels — stays fixed while grid scrolls */}
+            <div style={{ flexShrink: 0, paddingTop: 14, display: "grid", gridTemplateRows: `repeat(7, ${CELL}px)`, gap: GAP }}>
+              {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d, i) => (
+                <div key={d} style={{ fontSize: 8, color: "#475569", lineHeight: `${CELL}px`, width: 22, textAlign: "right", visibility: i % 2 === 1 ? "visible" : "hidden" }}>
+                  {d}
+                </div>
+              ))}
+            </div>
+            {/* Scrollable cell grid */}
+            <div className="overflow-x-auto pb-1 flex-1 min-w-0">
+              <div style={{ width: colCount * STEP, position: "relative" }}>
+                {/* Month labels */}
+                <div style={{ position: "relative", height: 14 }}>
+                  {monthLabels.map(({ col, label }) => (
+                    <span key={label} style={{ position: "absolute", left: col * STEP, fontSize: 9, color: "#64748b", whiteSpace: "nowrap", lineHeight: 1 }}>
+                      {label}
+                    </span>
+                  ))}
+                </div>
+                {/* Cell grid: CSS grid flows column-by-column */}
+                <div style={{
+                  display: "grid",
+                  gridTemplateRows: `repeat(7, ${CELL}px)`,
+                  gridAutoFlow: "column",
+                  gridAutoColumns: `${CELL}px`,
+                  gap: GAP,
+                }}>
+                  {cells.map(({ date, count, inYear, future }) => (
+                    <div
+                      key={date}
+                      title={inYear ? `${date}: ${count} task${count !== 1 ? "s" : ""} completed` : undefined}
+                      style={{
+                        backgroundColor: colorFor(count, inYear),
+                        borderRadius: 2,
+                        opacity: future ? 0.25 : 1,
+                        cursor: count > 0 ? "pointer" : "default",
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-1.5 justify-end">
+        <span style={{ fontSize: 9, color: "#475569" }}>Less</span>
+        {[0, 1, 2, 4, 7].map(n => (
+          <span key={n} style={{ display: "inline-block", width: CELL, height: CELL, borderRadius: 2, backgroundColor: colorFor(n, true), flexShrink: 0 }} />
+        ))}
+        <span style={{ fontSize: 9, color: "#475569" }}>More</span>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 // Stat card — clickable, with active state
 // ════════════════════════════════════════════════════════════════════
 function StatCard({
   label,
   value,
   accent,
+  accentBg = "bg-slate-900/60",
   iconColor,
   icon: Icon,
   delay = 0,
@@ -2695,19 +3349,20 @@ function StatCard({
   label: string;
   value: number;
   accent: string;
+  accentBg?: string;
   iconColor: string;
   icon: ComponentType<{ size?: number; className?: string }>;
   delay?: number;
 }) {
   return (
     <div
-      className={`rounded-xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm px-4 py-3 sm:px-5 sm:py-4 border-l-4 ${accent} animate-fade-in-up select-none transition-all duration-200 hover:border-slate-600 hover:bg-slate-800/40`}
+      className={`rounded-xl border border-slate-800 ${accentBg} backdrop-blur-sm px-4 py-3 sm:px-5 sm:py-4 border-l-4 ${accent} animate-fade-in-up select-none transition-all duration-200 hover:brightness-110`}
       style={{ animationDelay: `${delay}ms` }}
     >
       <div className="flex items-center justify-between mb-1">
         <Icon size={14} className={iconColor} />
       </div>
-      <div className="font-serif text-2xl sm:text-3xl leading-none text-slate-50">
+      <div className={`font-serif text-2xl sm:text-3xl leading-none ${iconColor}`}>
         {value}
       </div>
       <div className="mt-1.5 text-[10px] sm:text-[11px] tracking-[0.12em] uppercase text-slate-400">
@@ -2755,43 +3410,34 @@ function FilterSelect({
 function CompareBlock({
   pair,
   onImageClick,
+  onCompareZoom,
 }: {
   pair: CompareItem;
   onImageClick?: (src: string) => void;
+  onCompareZoom?: (pair: CompareItem) => void;
 }) {
   return (
     <div className="rounded-lg border border-slate-800 overflow-hidden">
-      <div className="bg-slate-800/60 text-[9px] font-bold tracking-widest uppercase text-slate-400 px-2.5 py-1">
-        {pair.label ? `${pair.label} — ` : ""}Before → After
+      <div className="bg-slate-800/50 px-2 py-0.5 flex items-center justify-between gap-2">
+        <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">
+          {pair.label ? `${pair.label} · ` : ""}Before → After
+        </span>
+        {onCompareZoom && (
+          <button onClick={() => onCompareZoom(pair)} title="View side by side" className="p-0.5 text-slate-600 hover:text-emerald-300 transition-colors">
+            <Eye size={10} />
+          </button>
+        )}
       </div>
-      <div className="grid grid-cols-2">
-        <div className="p-2 border-r border-slate-800">
-          <div className="text-[9px] tracking-widest uppercase text-orange-300 mb-1">
-            Before
-          </div>
-          <img
-            src={pair.before.src}
-            alt="Before"
-            onClick={() => onImageClick?.(pair.before.src)}
-            className="w-full h-16 object-cover rounded border border-slate-800 cursor-zoom-in"
-          />
-          <p className="text-[10px] text-slate-400 mt-1 leading-snug">
-            {pair.before.note}
-          </p>
+      <div className="grid grid-cols-2 gap-px bg-slate-800">
+        <div className="bg-slate-900/80 p-1.5">
+          <div className="text-[8px] tracking-widest uppercase font-semibold mb-0.5 text-orange-300/80">Before</div>
+          <img src={pair.before.src} alt="Before" onClick={() => onImageClick?.(pair.before.src)} className="w-full h-11 object-cover rounded cursor-zoom-in hover:opacity-90 transition-opacity" />
+          {pair.before.note && <p className="text-[9px] text-slate-500 mt-0.5 leading-tight truncate">{pair.before.note}</p>}
         </div>
-        <div className="p-2">
-          <div className="text-[9px] tracking-widest uppercase text-emerald-300 mb-1">
-            After
-          </div>
-          <img
-            src={pair.after.src}
-            alt="After"
-            onClick={() => onImageClick?.(pair.after.src)}
-            className="w-full h-16 object-cover rounded border border-slate-800 cursor-zoom-in"
-          />
-          <p className="text-[10px] text-slate-400 mt-1 leading-snug">
-            {pair.after.note}
-          </p>
+        <div className="bg-slate-900/80 p-1.5">
+          <div className="text-[8px] tracking-widest uppercase font-semibold mb-0.5 text-emerald-300/80">After</div>
+          <img src={pair.after.src} alt="After" onClick={() => onImageClick?.(pair.after.src)} className="w-full h-11 object-cover rounded cursor-zoom-in hover:opacity-90 transition-opacity" />
+          {pair.after.note && <p className="text-[9px] text-slate-500 mt-0.5 leading-tight truncate">{pair.after.note}</p>}
         </div>
       </div>
     </div>
@@ -2809,6 +3455,7 @@ function EntryCard({
   onView,
   onEdit,
   onImageClick,
+  onCompareZoom,
   raisedIssues = [],
   onViewIssue,
   onResolveIssue,
@@ -2821,6 +3468,7 @@ function EntryCard({
   onEdit: () => void;
   onDelete?: () => void;
   onImageClick: (src: string) => void;
+  onCompareZoom?: (pair: CompareItem) => void;
   raisedIssues?: RaisedIssue[];
   onViewIssue?: (issue: RaisedIssue) => void;
   onResolveIssue?: (issue: RaisedIssue) => void;
@@ -2993,6 +3641,7 @@ function EntryCard({
                       key={j}
                       pair={pair}
                       onImageClick={onImageClick}
+                      onCompareZoom={onCompareZoom}
                     />
                   ))}
                 </div>
@@ -3076,12 +3725,14 @@ function ViewEntryModal({
   onClose,
   onEdit,
   onImageClick,
+  onCompareZoom,
   readOnly = false,
 }: {
   entry: Entry | null;
   onClose: () => void;
   onEdit: () => void;
   onImageClick: (src: string) => void;
+  onCompareZoom?: (pair: CompareItem) => void;
   readOnly?: boolean;
 }) {
   useEffect(() => {
@@ -3206,6 +3857,7 @@ function ViewEntryModal({
                           key={j}
                           pair={pair}
                           onImageClick={onImageClick}
+                          onCompareZoom={onCompareZoom}
                         />
                       ))}
                     </div>
@@ -3814,15 +4466,16 @@ function GroupedIssueCard({
 // ════════════════════════════════════════════════════════════════════
 // COMPLETED PANEL
 // ════════════════════════════════════════════════════════════════════
-type DoneTask = Task & { date: string; project: string; entryTitle: string };
+type DoneTask = Task & { date: string; project: string; entryTitle: string; entryId: string };
 
 function CompletedPanel({
-  open, onClose, entries, issues,
+  open, onClose, entries, issues, onEditEntry,
 }: {
   open: boolean;
   onClose: () => void;
   entries: Entry[];
   issues: RaisedIssue[];
+  onEditEntry?: (entryId: string) => void;
 }) {
   const [dateRange, setDateRange] = useState<"week" | "month" | "all" | "custom">("week");
   const [customFrom, setCustomFrom] = useState("");
@@ -3853,7 +4506,7 @@ function CompletedPanel({
 
   const allDoneTasks = useMemo<DoneTask[]>(() =>
     entries.flatMap(e =>
-      e.tasks.filter(t => t.status === "done").map(t => ({ ...t, date: e.date, project: e.project, entryTitle: e.title }))
+      e.tasks.filter(t => t.status === "done").map(t => ({ ...t, date: e.date, project: e.project, entryTitle: e.title, entryId: e.id }))
     ).sort((a, b) => b.date.localeCompare(a.date)),
   [entries]);
 
@@ -4027,7 +4680,7 @@ function CompletedPanel({
                   const Icon = meta.icon;
                   const pm = task.priority ? PRIORITY_META[task.priority] : null;
                   return (
-                    <div key={i} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 transition-colors">
+                    <div key={i} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 transition-colors group">
                       <span className={`mt-0.5 shrink-0 ${meta.text}`}><Icon size={13} /></span>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-slate-200 leading-snug">{task.title}</p>
@@ -4040,7 +4693,18 @@ function CompletedPanel({
                           {task.tags?.map(tag => <span key={tag} className="text-[9px] text-slate-500 border border-slate-800 rounded-md px-1.5 py-0.5">#{tag}</span>)}
                         </div>
                       </div>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0 ${meta.text} ${meta.bg}`}>{meta.label}</span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${meta.text} ${meta.bg}`}>{meta.label}</span>
+                        {onEditEntry && (
+                          <button
+                            onClick={() => onEditEntry(task.entryId)}
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-all"
+                            title="Edit entry"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -4099,36 +4763,74 @@ function CompletedPanel({
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Completion Toast — pops up when a task is done or issue resolved
+// Completion Toast — stacked top-right, magical orb + fire effect
 // ════════════════════════════════════════════════════════════════════
 function CompletionToast({
-  toast,
+  toasts,
   onClose,
 }: {
-  toast: { headline: string; sub: string; verse: string; ref: string } | null;
-  onClose: () => void;
+  toasts: Array<{ id: string; headline: string; sub: string; verse: string; ref: string }>;
+  onClose: (id: string) => void;
 }) {
-  if (!toast) return null;
+  if (toasts.length === 0) return null;
   return (
-    <div className="fixed bottom-6 right-6 z-200 w-80 animate-fade-in-up pointer-events-auto">
-      <div className="rounded-2xl border border-emerald-700/40 bg-slate-900 shadow-2xl shadow-black/60 overflow-hidden">
-        <div className="bg-emerald-400/10 px-4 py-3 flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-bold text-emerald-300 leading-snug">{toast.headline}</p>
-            <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{toast.sub}</p>
+    <div className="fixed top-5 right-5 z-200 flex flex-col gap-3 pointer-events-none" style={{ width: 300 }}>
+      {toasts.map((toast) => (
+        <div key={toast.id} className="pointer-events-auto relative toast-fire rounded-2xl border border-orange-500/35 bg-slate-950/98 shadow-2xl shadow-black/70 overflow-hidden backdrop-blur-md">
+          {/* Magical ambient rings behind content */}
+          <svg
+            className="absolute pointer-events-none"
+            style={{ top: -28, left: -28, width: 120, height: 120, zIndex: 0, opacity: 0.9 }}
+            viewBox="0 0 120 120"
+          >
+            <circle cx="60" cy="60" r="44" fill="none" stroke="rgba(251,146,60,0.18)" strokeWidth="0.8" strokeDasharray="5 7"
+              style={{ transformOrigin: "60px 60px", animation: "spinCW 9s linear infinite" }} />
+            <circle cx="60" cy="60" r="54" fill="none" stroke="rgba(251,191,36,0.1)" strokeWidth="0.5" strokeDasharray="2 9"
+              style={{ transformOrigin: "60px 60px", animation: "spinCCW 14s linear infinite" }} />
+          </svg>
+          {/* Dim radial glow behind orb */}
+          <div className="absolute top-2 left-2 w-16 h-16 rounded-full pointer-events-none" style={{ background: "radial-gradient(circle, rgba(251,146,60,0.12) 0%, transparent 70%)", zIndex: 0 }} />
+
+          {/* Header */}
+          <div className="relative z-10 px-4 pt-3.5 pb-2.5 flex items-start gap-3">
+            {/* Fire orb with micro ring */}
+            <div className="relative shrink-0 mt-0.5" style={{ width: 36, height: 36 }}>
+              {/* Glow backdrop */}
+              <div className="absolute inset-0 rounded-full fire-orb-pulse" style={{ background: "radial-gradient(circle, rgba(251,146,60,0.35) 0%, transparent 70%)" }} />
+              {/* Circle face */}
+              <div className="absolute inset-0 rounded-full border border-orange-500/40 bg-orange-500/10 flex items-center justify-center">
+                <span className="fire-emoji text-base leading-none">🔥</span>
+              </div>
+              {/* Spinning ring around icon */}
+              <svg className="absolute pointer-events-none" style={{ top: -7, left: -7, width: 50, height: 50, overflow: "visible" }} viewBox="0 0 50 50">
+                <circle cx="25" cy="25" r="22" fill="none" stroke="rgba(251,146,60,0.5)" strokeWidth="1" strokeDasharray="4 5"
+                  style={{ transformOrigin: "25px 25px", animation: "spinCW 2.5s linear infinite" }} />
+                <circle cx="25" cy="25" r="17" fill="none" stroke="rgba(251,191,36,0.3)" strokeWidth="0.6" strokeDasharray="2 6"
+                  style={{ transformOrigin: "25px 25px", animation: "spinCCW 4s linear infinite" }} />
+              </svg>
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-bold text-slate-50 leading-snug tracking-tight">{toast.headline}</p>
+              <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">{toast.sub}</p>
+            </div>
+            <button onClick={() => onClose(toast.id)} className="shrink-0 -mt-0.5 -mr-1 p-1.5 rounded-lg text-slate-600 hover:text-slate-300 hover:bg-slate-800/60 transition-colors">
+              <X size={12} />
+            </button>
           </div>
-          <button onClick={onClose} className="shrink-0 mt-0.5 p-1 rounded text-slate-600 hover:text-slate-300 transition-colors">
-            <X size={13} />
-          </button>
+
+          {/* Verse block */}
+          <div className="relative z-10 mx-3 mb-3 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800/60">
+            <p className="text-[10px] text-slate-400 italic leading-relaxed">"{toast.verse}"</p>
+            <p className="text-[9px] text-emerald-400/80 mt-1 font-semibold tracking-wide">— {toast.ref}</p>
+          </div>
+
+          {/* Drain bar */}
+          <div className="relative z-10 h-px overflow-hidden bg-slate-800/40">
+            <div className="h-full w-full bg-linear-to-r from-transparent via-orange-500/80 to-amber-400/60 origin-left" style={{ animation: "drainWidth 7s linear forwards" }} />
+          </div>
         </div>
-        <div className="px-4 py-3 border-t border-slate-800 bg-slate-950/40">
-          <p className="text-[11px] text-slate-400 italic leading-relaxed">"{toast.verse}"</p>
-          <p className="text-[10px] text-emerald-500/70 mt-1.5 font-semibold tracking-wide">— {toast.ref}</p>
-        </div>
-        <div className="h-0.5 bg-slate-800 overflow-hidden">
-          <div className="h-full w-full bg-emerald-500/50 origin-left" style={{ animation: "drainWidth 7s linear forwards" }} />
-        </div>
-      </div>
+      ))}
     </div>
   );
 }

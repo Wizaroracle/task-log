@@ -24,6 +24,7 @@ export type Task = {
   tags?: string[];
   sortOrder?: number;
   compare?: CompareItem[];
+  media?: EntryMedia[];
 };
 
 export type Entry = {
