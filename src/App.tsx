@@ -255,6 +255,7 @@ export default function ProjectDashboard() {
   const [quickAddProject, setQuickAddProject] = useState<"VC+" | "VC+ CMS">("VC+");
   const [quickAdd, setQuickAdd] = useState({
     title: "",
+    description: "",
     priority: "",
     complexity: "",
     type: "",
@@ -360,6 +361,9 @@ export default function ProjectDashboard() {
   const [editingIssue, setEditingIssue] = useState<RaisedIssue | null>(null);
   const [issueFormOpen, setIssueFormOpen] = useState(false);
   const [issueForm, setIssueForm] = useState<Partial<RaisedIssue>>({});
+  const [issueFormMedia, setIssueFormMedia] = useState<Array<{ file: File | null; preview: string; caption: string }>>([]);
+  const [issueFormCompare, setIssueFormCompare] = useState<Array<{ label: string; before: { file: File | null; preview: string; note: string }; after: { file: File | null; preview: string; note: string } }>>([]);
+  const [issueFormSaving, setIssueFormSaving] = useState(false);
   const [dashIssueStatusFilter, setDashIssueStatusFilter] = useState("open");
   const [dashIssuePage, setDashIssuePage] = useState(1);
   const [dashIssueProjectFilter, setDashIssueProjectFilter] = useState("all");
@@ -369,7 +373,7 @@ export default function ProjectDashboard() {
 
   // Backlog inline edit
   const [editingBacklogTask, setEditingBacklogTask] = useState<import("./components/AddEntryModal").InProgressItem | null>(null);
-  const [backlogEditForm, setBacklogEditForm] = useState<{ title: string; priority: string; complexity: string; type: string; project: string }>({ title: "", priority: "", complexity: "", type: "", project: "" });
+  const [backlogEditForm, setBacklogEditForm] = useState<{ title: string; description: string; priority: string; complexity: string; type: string; project: string }>({ title: "", description: "", priority: "", complexity: "", type: "", project: "" });
   const [backlogEditMedia, setBacklogEditMedia] = useState<Array<{ file: File | null; preview: string; caption: string }>>([]);
   const [backlogEditCompare, setBacklogEditCompare] = useState<Array<{ label: string; before: { file: File | null; preview: string; note: string }; after: { file: File | null; preview: string; note: string } }>>([]);
   const [backlogEditSaving, setBacklogEditSaving] = useState(false);
@@ -447,33 +451,64 @@ export default function ProjectDashboard() {
 
   async function saveIssue() {
     if (!issueForm.title?.trim() || !issueForm.project) return;
-    if (editingIssue) {
-      const { error } = await supabase
-        .from("raised_issues")
-        .update({ ...issueForm })
-        .eq("id", editingIssue.id);
-      if (!error) {
-        setIssues((prev) => prev.map((i) => i.id === editingIssue.id ? { ...i, ...issueForm } as RaisedIssue : i));
+    setIssueFormSaving(true);
+    try {
+      const media: EntryMedia[] = await Promise.all(
+        issueFormMedia
+          .filter((m) => m.file !== null || m.preview !== "")
+          .map(async (m) => ({
+            kind: "image" as const,
+            src: m.file ? await uploadFile(m.file) : m.preview,
+            ...(m.caption.trim() ? { caption: m.caption.trim() } : {}),
+          })),
+      );
+      const compare: CompareItem[] = await Promise.all(
+        issueFormCompare.map(async (c) => ({
+          ...(c.label.trim() ? { label: c.label.trim() } : {}),
+          before: { src: c.before.file ? await uploadFile(c.before.file) : c.before.preview, note: c.before.note },
+          after:  { src: c.after.file  ? await uploadFile(c.after.file)  : c.after.preview,  note: c.after.note  },
+        })),
+      );
+
+      const resetForm = () => {
         setEditingIssue(null);
         setIssueFormOpen(false);
         setIssueForm({});
-      }
-    } else {
-      const payload = {
-        project: issueForm.project,
-        title: issueForm.title,
-        description: issueForm.description ?? "",
-        type: issueForm.type ?? "bugfix",
-        priority: issueForm.priority ?? "major",
-        status: "open" as const,
-        date_raised: issueForm.date_raised ?? new Date().toISOString().slice(0, 10),
+        setIssueFormMedia([]);
+        setIssueFormCompare([]);
       };
-      const { data, error } = await supabase.from("raised_issues").insert(payload).select().single();
-      if (!error && data) {
-        setIssues((prev) => [data as RaisedIssue, ...prev]);
-        setIssueFormOpen(false);
-        setIssueForm({});
+
+      if (editingIssue) {
+        const patch = {
+          ...issueForm,
+          ...(media.length > 0 ? { media } : {}),
+          ...(compare.length > 0 ? { compare } : {}),
+        };
+        const { error } = await supabase.from("raised_issues").update(patch).eq("id", editingIssue.id);
+        if (!error) {
+          setIssues((prev) => prev.map((i) => i.id === editingIssue.id ? { ...i, ...patch } as RaisedIssue : i));
+          resetForm();
+        }
+      } else {
+        const payload = {
+          project: issueForm.project,
+          title: issueForm.title,
+          description: issueForm.description ?? "",
+          type: issueForm.type ?? "bugfix",
+          priority: issueForm.priority ?? "major",
+          status: "open" as const,
+          date_raised: issueForm.date_raised ?? new Date().toISOString().slice(0, 10),
+          ...(media.length > 0 ? { media } : {}),
+          ...(compare.length > 0 ? { compare } : {}),
+        };
+        const { data, error } = await supabase.from("raised_issues").insert(payload).select().single();
+        if (!error && data) {
+          setIssues((prev) => [data as RaisedIssue, ...prev]);
+          resetForm();
+        }
       }
+    } finally {
+      setIssueFormSaving(false);
     }
   }
 
@@ -526,6 +561,7 @@ export default function ProjectDashboard() {
           ? {
               ...t,
               title: backlogEditForm.title.trim(),
+              ...(backlogEditForm.description.trim() ? { description: backlogEditForm.description.trim() } : { description: undefined }),
               type: (backlogEditForm.type || undefined) as Task["type"],
               priority: (backlogEditForm.priority || undefined) as Task["priority"],
               complexity: (backlogEditForm.complexity || undefined) as Task["complexity"],
@@ -565,6 +601,81 @@ export default function ProjectDashboard() {
 
   useEffect(() => { loadIssues(); }, []);
   useEffect(() => { loadFeatures(); }, []);
+
+  // Auto-generate a card for today when in-progress tasks exist from a previous day
+  useEffect(() => {
+    if (loading || readOnly) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const lastAutoGen = localStorage.getItem("vc-auto-gen-date");
+    if (lastAutoGen === today) return;
+
+    // Collect unique in-progress tasks (deduplicated by title)
+    const seen = new Set<string>();
+    const progressTasks: Array<{ task: Task; project: Entry["project"]; sourceTitle: string }> = [];
+    for (const e of entries) {
+      for (const t of e.tasks) {
+        if (t.status === "progress" && !seen.has(t.title)) {
+          seen.add(t.title);
+          progressTasks.push({ task: t, project: e.project, sourceTitle: e.title });
+        }
+      }
+    }
+
+    if (progressTasks.length === 0) {
+      localStorage.setItem("vc-auto-gen-date", today);
+      return;
+    }
+
+    // Check which in-progress tasks are already in today's entry
+    const todayEntry = entries.find((e) => e.date === today);
+    const todayProgressTitles = new Set(
+      (todayEntry?.tasks ?? []).filter((t) => t.status === "progress").map((t) => t.title),
+    );
+    const missing = progressTasks.filter((p) => !todayProgressTitles.has(p.task.title));
+
+    if (missing.length === 0) {
+      localStorage.setItem("vc-auto-gen-date", today);
+      return;
+    }
+
+    const newTasks: Task[] = missing.map((p) => p.task);
+    if (todayEntry) {
+      const updatedTasks = [...todayEntry.tasks, ...newTasks];
+      supabase
+        .from("entries")
+        .update({ tasks: updatedTasks })
+        .eq("id", todayEntry.id)
+        .then(({ error }) => {
+          if (!error) {
+            setEntries((prev) =>
+              prev.map((e) => e.id === todayEntry.id ? { ...e, tasks: updatedTasks } : e),
+            );
+            localStorage.setItem("vc-auto-gen-date", today);
+          }
+        });
+    } else {
+      const uniqueSources = [...new Set(missing.map((p) => p.sourceTitle))];
+      const entryTitle = uniqueSources.length === 1 ? uniqueSources[0] : "In Progress Tasks";
+      const project = missing[0].project;
+      const newEntry: Entry = {
+        id: crypto.randomUUID(),
+        project,
+        date: today,
+        title: entryTitle,
+        tasks: newTasks,
+      };
+      supabase
+        .from("entries")
+        .insert(newEntry)
+        .then(({ error }) => {
+          if (!error) {
+            setEntries((prev) => [newEntry, ...prev]);
+            localStorage.setItem("vc-auto-gen-date", today);
+          }
+        });
+    }
+  }, [loading, readOnly, entries]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -997,6 +1108,7 @@ export default function ProjectDashboard() {
         tasks: [
           {
             title: quickAdd.title.trim(),
+            ...(quickAdd.description.trim() ? { description: quickAdd.description.trim() } : {}),
             status: "planned",
             ...(quickAdd.type ? { type: quickAdd.type as Task["type"] } : {}),
             ...(quickAdd.priority ? { priority: quickAdd.priority as Task["priority"] } : {}),
@@ -1011,7 +1123,7 @@ export default function ProjectDashboard() {
       const { error } = await supabase.from("entries").insert(newEntry);
       if (!error) {
         setEntries((prev) => [newEntry, ...prev]);
-        setQuickAdd({ title: "", priority: "", complexity: "", type: "", tags: [] });
+        setQuickAdd({ title: "", description: "", priority: "", complexity: "", type: "", tags: [] });
         setQuickAddMedia([]);
         setQuickAddCompare([]);
         setQuickAddFeatureId(null);
@@ -1476,11 +1588,76 @@ export default function ProjectDashboard() {
                       </select>
                       <input type="date" value={issueForm.date_raised ?? new Date().toISOString().slice(0,10)} onChange={e => setIssueForm(f => ({ ...f, date_raised: e.target.value }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-xs px-2 py-1.5 outline-none" />
                     </div>
+                    {/* Images */}
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Images</span>
+                        <label className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-red-400 transition-colors cursor-pointer">
+                          <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setIssueFormMedia((d) => [...d, { file: f, preview: URL.createObjectURL(f), caption: "" }]); }} />
+                          <Plus size={10} /> Add image
+                        </label>
+                      </div>
+                      {issueFormMedia.length > 0 && (
+                        <div className={`grid gap-1.5 ${issueFormMedia.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                          {issueFormMedia.map((m, mi) => (
+                            <div key={mi} className="relative group rounded-lg overflow-hidden border border-slate-800">
+                              <img src={m.preview} alt="" className="w-full h-20 object-cover" />
+                              <div className="absolute inset-x-0 bottom-0 bg-slate-900/80 px-1.5 py-0.5 flex items-center gap-1">
+                                <input value={m.caption} onChange={(e) => setIssueFormMedia((d) => d.map((x, j) => j === mi ? { ...x, caption: e.target.value } : x))} placeholder="Caption…" className="flex-1 bg-transparent text-[11px] text-slate-300 outline-none placeholder:text-slate-600" />
+                                <button onClick={() => setIssueFormMedia((d) => d.filter((_, j) => j !== mi))} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={10} /></button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {/* Before / After */}
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Before / After</span>
+                        <button onClick={() => setIssueFormCompare((d) => [...d, { label: "", before: { file: null, preview: "", note: "" }, after: { file: null, preview: "", note: "" } }])} className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-red-400 transition-colors">
+                          <Plus size={10} /> Add comparison
+                        </button>
+                      </div>
+                      {issueFormCompare.map((c, ci) => (
+                        <div key={ci} className="rounded-xl border border-slate-800 bg-slate-950/40 p-2.5 flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                            <input value={c.label} onChange={(e) => setIssueFormCompare((d) => d.map((x, j) => j === ci ? { ...x, label: e.target.value } : x))} placeholder="Label (optional)" className="flex-1 rounded bg-transparent border-b border-slate-800 text-[11px] text-slate-300 outline-none py-0.5 placeholder:text-slate-700" />
+                            <button onClick={() => setIssueFormCompare((d) => d.filter((_, j) => j !== ci))} className="text-slate-600 hover:text-red-400 transition-colors"><Trash2 size={11} /></button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {(["before", "after"] as const).map((side) => {
+                              const slot = c[side];
+                              return (
+                                <div key={side} className="flex flex-col gap-1">
+                                  <p className="text-[9px] uppercase tracking-widest text-slate-600 font-bold">{side}</p>
+                                  {slot.preview ? (
+                                    <div className="relative group rounded-lg overflow-hidden border border-slate-800">
+                                      <img src={slot.preview} alt={side} className="w-full h-16 object-cover" />
+                                      <label className="absolute inset-0 flex items-center justify-center bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                                        <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setIssueFormCompare((d) => d.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x)); }} />
+                                        <ImageIcon size={13} className="text-slate-300" />
+                                      </label>
+                                    </div>
+                                  ) : (
+                                    <label className="flex flex-col items-center justify-center h-16 rounded-lg border border-dashed border-slate-700 text-slate-600 hover:border-red-700/50 hover:text-red-400 transition-colors cursor-pointer">
+                                      <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; setIssueFormCompare((d) => d.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x)); }} />
+                                      <ImageIcon size={13} /><span className="text-[10px] mt-0.5">Upload</span>
+                                    </label>
+                                  )}
+                                  <input value={slot.note} onChange={(e) => setIssueFormCompare((d) => d.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], note: e.target.value } } : x))} placeholder="Note…" className="text-[11px] text-slate-400 bg-transparent border-b border-slate-800/60 outline-none py-0.5 placeholder:text-slate-700" />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                     <div className="flex gap-2">
-                      <button onClick={saveIssue} disabled={!issueForm.title?.trim() || !issueForm.project} className="flex-1 rounded-lg border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-semibold py-2 hover:bg-red-400/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                        {editingIssue ? "Save Changes" : "Raise Issue"}
+                      <button onClick={saveIssue} disabled={!issueForm.title?.trim() || !issueForm.project || issueFormSaving} className="flex-1 rounded-lg border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-semibold py-2 hover:bg-red-400/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                        {issueFormSaving ? "Saving…" : editingIssue ? "Save Changes" : "Raise Issue"}
                       </button>
-                      <button onClick={() => { setIssueFormOpen(false); setEditingIssue(null); setIssueForm({}); }} className="px-3 rounded-lg border border-slate-700 text-slate-400 text-xs hover:bg-slate-800 transition-colors">Cancel</button>
+                      <button onClick={() => { setIssueFormOpen(false); setEditingIssue(null); setIssueForm({}); setIssueFormMedia([]); setIssueFormCompare([]); }} className="px-3 rounded-lg border border-slate-700 text-slate-400 text-xs hover:bg-slate-800 transition-colors">Cancel</button>
                     </div>
                   </div>
                 )}
@@ -1495,7 +1672,7 @@ export default function ProjectDashboard() {
                     <ul className="flex flex-col gap-1.5">
                       {pagedIss.map(issue => (
                         <IssueRow key={issue.id} issue={issue} readOnly={readOnly}
-                          onEdit={iss => { setEditingIssue(iss); setIssueForm(iss); setIssueFormOpen(true); }}
+                          onEdit={iss => { setEditingIssue(iss); setIssueForm(iss); setIssueFormMedia((iss.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" }))); setIssueFormCompare((iss.compare ?? []).map(c => ({ label: c.label ?? "", before: { file: null, preview: c.before.src, note: c.before.note }, after: { file: null, preview: c.after.src, note: c.after.note } }))); setIssueFormOpen(true); }}
                           onDelete={deleteIssue}
                           onStart={startIssue}
                           onToggle={toggleIssueStatus}
@@ -1580,6 +1757,7 @@ export default function ProjectDashboard() {
                             : "";
                           setQuickAdd({
                             title: "",
+                            description: "",
                             type: activeFeature ? "feature" : "",
                             priority: activeFeature ? "minor" : "",
                             complexity: activeFeature ? "hard" : "",
@@ -1772,6 +1950,14 @@ export default function ProjectDashboard() {
                                   onKeyDown={(e) => { if (e.key === "Escape") setEditingBacklogTask(null); }}
                                   className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-100 outline-none focus:border-emerald-500/60"
                                 />
+                                {/* Description */}
+                                <textarea
+                                  value={backlogEditForm.description}
+                                  onChange={(e) => setBacklogEditForm((f) => ({ ...f, description: e.target.value }))}
+                                  placeholder="Description (optional)"
+                                  rows={2}
+                                  className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-blue-700/60 resize-none placeholder:text-slate-600"
+                                />
                                 {/* Project */}
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 shrink-0">Project</span>
@@ -1900,6 +2086,9 @@ export default function ProjectDashboard() {
                                 <div className="flex-1 min-w-0">
                                   <span className="text-[9px] text-slate-600 font-medium tracking-wide">{item.entryProject}</span>
                                   <p className="text-sm text-slate-300 leading-snug">{item.task.title}</p>
+                                  {item.task.description && (
+                                    <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">{item.task.description}</p>
+                                  )}
                                   <div className="flex flex-wrap items-center gap-1 mt-0.5">
                                     {item.task.type && (() => {
                                       const tm = TYPE_META[item.task.type];
@@ -1956,7 +2145,7 @@ export default function ProjectDashboard() {
                                     <button
                                       onClick={() => {
                                         setEditingBacklogTask(item);
-                                        setBacklogEditForm({ title: item.task.title, priority: item.task.priority ?? "", complexity: item.task.complexity ?? "", type: item.task.type ?? "", project: item.entryProject });
+                                        setBacklogEditForm({ title: item.task.title, description: item.task.description ?? "", priority: item.task.priority ?? "", complexity: item.task.complexity ?? "", type: item.task.type ?? "", project: item.entryProject });
                                         setBacklogEditMedia((item.task.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" })));
                                         setBacklogEditCompare((item.task.compare ?? []).map(c => ({ label: c.label ?? "", before: { file: null, preview: c.before.src, note: c.before.note }, after: { file: null, preview: c.after.src, note: c.after.note } })));
                                         setBacklogEditFeatureId(item.task.featureId ?? null);
@@ -2189,7 +2378,9 @@ export default function ProjectDashboard() {
                     onEdit={() => setEditingEntry(entry)}
                     onImageClick={setZoomSrc}
                     onCompareZoom={setCompareZoom}
-                    raisedIssues={issuesByDate.get(entry.date) ?? []}
+                    raisedIssues={(issuesByDate.get(entry.date) ?? []).filter(
+                      (issue) => type === "all" || issue.type === type
+                    )}
                     onViewIssue={setDetailIssue}
                     onResolveIssue={toggleIssueStatus}
                   />
@@ -2310,6 +2501,14 @@ export default function ProjectDashboard() {
                 onKeyDown={(e) => e.key === "Enter" && handleQuickAddSave()}
                 placeholder="Task title..."
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-blue-700/60 placeholder:text-slate-600 transition-colors"
+              />
+
+              <textarea
+                value={quickAdd.description}
+                onChange={(e) => setQuickAdd((d) => ({ ...d, description: e.target.value }))}
+                placeholder="Description (optional)"
+                rows={2}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 outline-none focus:border-blue-700/60 resize-none placeholder:text-slate-600 transition-colors"
               />
 
               {/* Project */}
@@ -3928,7 +4127,6 @@ function EntryCard({
             const resolved = issue.status === "resolved";
             const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
             const pm = PRIORITY_META[issue.priority];
-            const hasMedia = (issue.media?.length ?? 0) + (issue.compare?.length ?? 0) > 0;
             return (
               <div key={issue.id} className={`flex items-start gap-2.5 pl-2.5 border-l-2 ${resolved ? "border-emerald-500/40" : "border-red-500/50"}`}>
                 <div className="flex-1 min-w-0">
@@ -3946,8 +4144,33 @@ function EntryCard({
                       ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-emerald-400 bg-emerald-400/10">Resolved</span>
                       : <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>
                     }
-                    {hasMedia && <span className="text-[9px] text-slate-500 flex items-center gap-0.5"><ImageIcon size={9} /> media</span>}
                   </div>
+                  {/* Media thumbnails */}
+                  {issue.media && issue.media.length > 0 && (
+                    <div className={`grid gap-1.5 mt-2 ${issue.media.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                      {issue.media.map((m, mi) => (
+                        <figure key={mi} className="m-0">
+                          <img
+                            src={m.src}
+                            alt={m.caption ?? issue.title}
+                            onClick={() => onImageClick(m.src)}
+                            className="w-full h-24 object-cover rounded-lg border border-slate-800 cursor-zoom-in hover:opacity-90 transition-opacity"
+                          />
+                          {m.caption && (
+                            <figcaption className="text-[10px] text-slate-500 mt-0.5 truncate">{m.caption}</figcaption>
+                          )}
+                        </figure>
+                      ))}
+                    </div>
+                  )}
+                  {/* Compare pairs */}
+                  {issue.compare && issue.compare.length > 0 && (
+                    <div className="mt-2 flex flex-col gap-2">
+                      {issue.compare.map((pair, ci) => (
+                        <CompareBlock key={ci} pair={pair} onImageClick={onImageClick} onCompareZoom={onCompareZoom} />
+                      ))}
+                    </div>
+                  )}
                 </div>
                 {!readOnly && (
                   <button
@@ -3986,6 +4209,11 @@ function EntryCard({
                   <span className="text-xs sm:text-sm text-slate-300 leading-snug">
                     {task.title}
                   </span>
+                  {task.description && (
+                    <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">
+                      {task.description}
+                    </p>
+                  )}
                   {(task.priority ||
                     task.complexity ||
                     task.dateRange ||
@@ -4207,6 +4435,11 @@ function ViewEntryModal({
                       <p className="text-sm sm:text-base text-slate-200 leading-snug">
                         {task.title}
                       </p>
+                      {task.description && (
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                          {task.description}
+                        </p>
+                      )}
                       <div className="flex flex-wrap items-center gap-1.5 mt-2">
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide flex items-center gap-1 ${meta.text} ${meta.bg}`}

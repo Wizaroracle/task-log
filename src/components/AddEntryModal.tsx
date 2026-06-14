@@ -43,6 +43,7 @@ const TASK_TAGS = [
 
 type TaskDraft = {
   title: string;
+  description: string;
   type: NonNullable<Task["type"]>;
   status: Task["status"];
   priority: Task["priority"];
@@ -78,6 +79,7 @@ const BLANK_COMPARE = (): CompareDraft => ({
 
 const BLANK_TASK = (): TaskDraft => ({
   title: "",
+  description: "",
   type: "task",
   status: "done",
   priority: undefined,
@@ -125,6 +127,7 @@ function entryToDraft(entry: Entry): EntryDraft {
     tags: (entry.tags ?? []).join(", "),
     tasks: entry.tasks.map((t) => ({
       title: t.title,
+      description: t.description ?? "",
       type: t.type ?? "task",
       status: t.status,
       priority: t.priority,
@@ -176,6 +179,7 @@ export function AddEntryModal({
       } else {
         const carried: TaskDraft[] = inProgressItems.map((item) => ({
           title: item.task.title,
+          description: item.task.description ?? "",
           type: item.task.type ?? "task",
           status: "progress" as Task["status"],
           priority: item.task.priority,
@@ -188,6 +192,7 @@ export function AddEntryModal({
           ? [
               {
                 title: seedTask.title,
+                description: seedTask.description ?? "",
                 type: seedTask.type ?? "task",
                 status: "progress" as Task["status"],
                 priority: seedTask.priority,
@@ -314,6 +319,7 @@ export function AddEntryModal({
           );
           return {
             title: t.title.trim(),
+            ...(t.description.trim() ? { description: t.description.trim() } : {}),
             type: t.type,
             status: t.status,
             ...(t.priority ? { priority: t.priority } : {}),
@@ -619,7 +625,7 @@ function TaskBlock({
         <input
           value={task.title}
           onChange={(e) => onUpdate({ title: e.target.value })}
-          placeholder="Task description"
+          placeholder="Task title"
           className="flex-1 bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-600"
         />
         {onRemove && (
@@ -632,6 +638,14 @@ function TaskBlock({
           </button>
         )}
       </div>
+
+      <textarea
+        value={task.description}
+        onChange={(e) => onUpdate({ description: e.target.value })}
+        placeholder="Description (optional)"
+        rows={2}
+        className={INPUT_CLS + " resize-none text-xs py-1.5"}
+      />
 
       <div className="grid grid-cols-2 gap-2">
         <select
@@ -690,7 +704,7 @@ function TaskBlock({
       <input
         value={task.dateRange}
         onChange={(e) => onUpdate({ dateRange: e.target.value })}
-        placeholder="Description (optional)"
+        placeholder="Date range (e.g. Jun 10 → Jun 14)"
         className={SEL_CLS + " w-full placeholder:text-slate-600"}
       />
 
