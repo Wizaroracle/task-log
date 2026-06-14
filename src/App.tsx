@@ -32,6 +32,7 @@ import {
   ChevronUp,
   ChevronDown,
   GitCommitHorizontal,
+  Crosshair,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
 import type { CompareItem, Entry, EntryMedia, Feature, RaisedIssue, Task } from "./utils/entries/entries";
@@ -267,6 +268,22 @@ export default function ProjectDashboard() {
     before: { file: File | null; preview: string; note: string };
     after: { file: File | null; preview: string; note: string };
   }>>([]);
+  const [focusedKeys, setFocusedKeys] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem("vc-focused-tasks");
+      return stored ? new Set<string>(JSON.parse(stored)) : new Set<string>();
+    } catch { return new Set<string>(); }
+  });
+  function isFocused(kind: string, key: string) { return focusedKeys.has(`${kind}:${key}`); }
+  function toggleFocus(kind: string, key: string) {
+    setFocusedKeys(prev => {
+      const next = new Set(prev);
+      const k = `${kind}:${key}`;
+      if (next.has(k)) next.delete(k); else next.add(k);
+      localStorage.setItem("vc-focused-tasks", JSON.stringify([...next]));
+      return next;
+    });
+  }
   const [backlogTagFilter, setBacklogTagFilter] = useState("all");
   const [backlogFilterOpen, setBacklogFilterOpen] = useState(false);
   const [backlogPriorityFilter, setBacklogPriorityFilter] = useState("all");
@@ -298,7 +315,13 @@ export default function ProjectDashboard() {
   // Features (epics)
   const [features, setFeatures] = useState<Feature[]>([]);
   const [_featuresLoading, setFeaturesLoading] = useState(false);
-  const [featureTabFilter, setFeatureTabFilter] = useState<string>("all");
+  const [featureTabFilter, setFeatureTabFilter] = useState<string>(
+    () => localStorage.getItem("vc-feature-tab") ?? "all"
+  );
+  function setFeatureTabFilterPersist(id: string) {
+    localStorage.setItem("vc-feature-tab", id);
+    setFeatureTabFilter(id);
+  }
   const [createFeatureOpen, setCreateFeatureOpen] = useState(false);
   const [createFeatureForm, setCreateFeatureForm] = useState({ name: "", color: FEATURE_PRESET_COLORS[0], description: "" });
   const [createFeatureSaving, setCreateFeatureSaving] = useState(false);
@@ -423,7 +446,7 @@ export default function ProjectDashboard() {
     const { data, error } = await supabase.from("features").insert(payload).select().single();
     if (!error && data) {
       setFeatures(prev => [...prev, data as Feature]);
-      setFeatureTabFilter((data as Feature).id);
+      setFeatureTabFilterPersist((data as Feature).id);
       setCreateFeatureForm({ name: "", color: FEATURE_PRESET_COLORS[0], description: "" });
       setCreateFeatureOpen(false);
     }
@@ -434,7 +457,7 @@ export default function ProjectDashboard() {
     const { error } = await supabase.from("features").delete().eq("id", id);
     if (!error) {
       setFeatures(prev => prev.filter(f => f.id !== id));
-      if (featureTabFilter === id) setFeatureTabFilter("all");
+      if (featureTabFilter === id) setFeatureTabFilterPersist("all");
     }
   }
 
@@ -1316,14 +1339,21 @@ export default function ProjectDashboard() {
           {/* In Progress */}
           {(() => {
             const IP_PER_PAGE = 5;
-            const ipTotalPages = Math.ceil(
-              inProgressItems.length / IP_PER_PAGE,
-            );
-            const pagedIP = inProgressItems.slice(
+            const sortedIPItems = [...inProgressItems].sort((a, b) => {
+              const af = isFocused("ip-task", a.task.title) ? 0 : 1;
+              const bf = isFocused("ip-task", b.task.title) ? 0 : 1;
+              return af - bf;
+            });
+            const ipTotalPages = Math.ceil(sortedIPItems.length / IP_PER_PAGE);
+            const pagedIP = sortedIPItems.slice(
               (inProgressPage - 1) * IP_PER_PAGE,
               inProgressPage * IP_PER_PAGE,
             );
-            const inProgressIssues = issues.filter(i => i.status === "in_progress");
+            const inProgressIssues = [...issues.filter(i => i.status === "in_progress")].sort((a, b) => {
+              const af = isFocused("issue", a.id) ? 0 : 1;
+              const bf = isFocused("issue", b.id) ? 0 : 1;
+              return af - bf;
+            });
             const totalInProgress = inProgressItems.length + inProgressIssues.length;
             return (
               <section className="flex flex-col gap-3 p-4 rounded-2xl border border-yellow-400/20 bg-yellow-400/5">
@@ -1355,10 +1385,10 @@ export default function ProjectDashboard() {
                           {inProgressIssues.map(issue => {
                             const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
                             const pm = PRIORITY_META[issue.priority];
+                            const focusedIssue = isFocused("issue", issue.id);
                             return (
-                              <div key={issue.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
-                                {/* Left accent dot */}
-                                <span className="w-1.5 h-1.5 rounded-full bg-red-400/70 shrink-0" />
+                              <div key={issue.id} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${focusedIssue ? "border-cyan-500/40 bg-cyan-500/8" : "border-transparent hover:border-slate-800 hover:bg-slate-800/25"}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${focusedIssue ? "bg-cyan-400" : "bg-red-400/70"}`} />
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 mb-0.5">
                                     <span className="text-[9px] text-slate-600 font-medium">{issue.project}</span>
@@ -1370,23 +1400,32 @@ export default function ProjectDashboard() {
                                   </button>
                                   {issue.date_started && <p className="text-[10px] text-slate-600 mt-0.5">started {issue.date_started}</p>}
                                 </div>
-                                {!readOnly && (
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button onClick={() => toggleIssueStatus(issue)} className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors whitespace-nowrap">
-                                      ✓ Resolve
-                                    </button>
-                                    <button
-                                      onClick={async () => {
-                                        const patch: Partial<RaisedIssue> = { status: "open", date_started: undefined };
-                                        const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
-                                        if (!error) setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, ...patch } : i));
-                                      }}
-                                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap"
-                                    >
-                                      ← Open
-                                    </button>
-                                  </div>
-                                )}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    onClick={() => toggleFocus("issue", issue.id)}
+                                    className={`p-1 rounded transition-colors ${focusedIssue ? "text-cyan-400 bg-cyan-500/15" : "text-slate-600 hover:text-cyan-400/70"}`}
+                                    title={focusedIssue ? "Remove focus" : "Focus this issue"}
+                                  >
+                                    <Crosshair size={11} />
+                                  </button>
+                                  {!readOnly && (
+                                    <>
+                                      <button onClick={() => toggleIssueStatus(issue)} className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors whitespace-nowrap">
+                                        ✓ Resolve
+                                      </button>
+                                      <button
+                                        onClick={async () => {
+                                          const patch: Partial<RaisedIssue> = { status: "open", date_started: undefined };
+                                          const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+                                          if (!error) setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, ...patch } : i));
+                                        }}
+                                        className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap"
+                                      >
+                                        ← Open
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
                               </div>
                             );
                           })}
@@ -1418,9 +1457,10 @@ export default function ProjectDashboard() {
                         const typeKey = (item.task.type ?? "task") as keyof typeof TYPE_META;
                         const tm = TYPE_META[typeKey] ?? TYPE_META.task;
                         const TIcon = tm.icon;
+                        const focusedIPTask = isFocused("ip-task", item.task.title);
                         return (
-                          <div key={i} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
-                            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400/80 shrink-0" />
+                          <div key={i} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${focusedIPTask ? "border-cyan-500/40 bg-cyan-500/8" : "border-transparent hover:border-slate-800 hover:bg-slate-800/25"}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${focusedIPTask ? "bg-cyan-400" : "bg-yellow-400/80"}`} />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5 mb-0.5">
                                 <span className="text-[9px] text-slate-600 font-medium">{item.entryProject}</span>
@@ -1451,24 +1491,33 @@ export default function ProjectDashboard() {
                                 <span className="text-[10px] text-slate-600">started {formatDate(item.entryDate)}</span>
                               </div>
                             </div>
-                            {!readOnly && (
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                  onClick={() => markTaskDone(item.task.title)}
-                                  disabled={actionLoading === item.task.title}
-                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40 whitespace-nowrap"
-                                >
-                                  ✓ Done
-                                </button>
-                                <button
-                                  onClick={() => markTaskPlanned(item.task.title)}
-                                  disabled={actionLoading === item.task.title}
-                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors disabled:opacity-40 whitespace-nowrap"
-                                >
-                                  → Plan
-                                </button>
-                              </div>
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => toggleFocus("ip-task", item.task.title)}
+                                className={`p-1 rounded transition-colors ${focusedIPTask ? "text-cyan-400 bg-cyan-500/15" : "text-slate-600 hover:text-cyan-400/70"}`}
+                                title={focusedIPTask ? "Remove focus" : "Focus this task"}
+                              >
+                                <Crosshair size={11} />
+                              </button>
+                              {!readOnly && (
+                                <>
+                                  <button
+                                    onClick={() => markTaskDone(item.task.title)}
+                                    disabled={actionLoading === item.task.title}
+                                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40 whitespace-nowrap"
+                                  >
+                                    ✓ Done
+                                  </button>
+                                  <button
+                                    onClick={() => markTaskPlanned(item.task.title)}
+                                    disabled={actionLoading === item.task.title}
+                                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors disabled:opacity-40 whitespace-nowrap"
+                                  >
+                                    → Plan
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
@@ -1515,6 +1564,9 @@ export default function ProjectDashboard() {
               .filter(i => dashIssueProjectFilter === "all" || i.project === dashIssueProjectFilter)
               .filter(i => dashIssueStatusFilter === "all" ? true : i.status === dashIssueStatusFilter)
               .sort((a, b) => {
+                const af = isFocused("issue", a.id) ? 0 : 1;
+                const bf = isFocused("issue", b.id) ? 0 : 1;
+                if (af !== bf) return af - bf;
                 const sd = (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3);
                 if (sd !== 0) return sd;
                 return (PRIORITY_RANK[a.priority] ?? 3) - (PRIORITY_RANK[b.priority] ?? 3);
@@ -1673,6 +1725,8 @@ export default function ProjectDashboard() {
                           onDelete={deleteIssue}
                           onStart={startIssue}
                           onToggle={toggleIssueStatus}
+                          focused={isFocused("issue", issue.id)}
+                          onFocus={() => toggleFocus("issue", issue.id)}
                         />
                       ))}
                     </ul>
@@ -1697,10 +1751,13 @@ export default function ProjectDashboard() {
           {/* Planned / Backlog */}
           {(() => {
             const BL_PER_PAGE = 7;
-            const blTotalPages = Math.ceil(
-              filteredPlannedItems.length / BL_PER_PAGE,
-            );
-            const pagedBL = filteredPlannedItems.slice(
+            const sortedPlannedItems = [...filteredPlannedItems].sort((a, b) => {
+              const af = isFocused("planned", a.task.title) ? 0 : 1;
+              const bf = isFocused("planned", b.task.title) ? 0 : 1;
+              return af - bf;
+            });
+            const blTotalPages = Math.ceil(sortedPlannedItems.length / BL_PER_PAGE);
+            const pagedBL = sortedPlannedItems.slice(
               (backlogPage - 1) * BL_PER_PAGE,
               backlogPage * BL_PER_PAGE,
             );
@@ -1782,7 +1839,7 @@ export default function ProjectDashboard() {
                   ].map(tab => (
                     <div key={tab.id} className="group relative flex items-center">
                       <button
-                        onClick={() => { setFeatureTabFilter(tab.id); setBacklogPage(1); }}
+                        onClick={() => { setFeatureTabFilterPersist(tab.id); setBacklogPage(1); }}
                         className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors border ${
                           featureTabFilter === tab.id
                             ? "bg-blue-400/15 border-blue-400/40 text-blue-300"
@@ -1894,6 +1951,7 @@ export default function ProjectDashboard() {
                       {pagedBL.map((item, pageLocalIdx) => {
                         const realIdx =
                           (backlogPage - 1) * BL_PER_PAGE + pageLocalIdx;
+                        const isFocusedPlanned = isFocused("planned", item.task.title);
                         return (
                           <li
                             key={item.task.title}
@@ -1925,16 +1983,16 @@ export default function ProjectDashboard() {
                                   }
                                 : undefined
                             }
-                            className={`flex items-start gap-2.5 py-2 px-1 rounded-lg border transition-colors ${
-                              !readOnly &&
-                              dragOverIdx === realIdx &&
-                              dragIdx !== realIdx
+                            className={`flex items-center gap-2.5 py-2.5 px-2 rounded-xl border transition-all ${
+                              isFocusedPlanned
+                                ? "border-cyan-500/35 bg-cyan-500/6 shadow-[0_0_0_1px_rgb(6_182_212_/_0.15)]"
+                                : !readOnly && dragOverIdx === realIdx && dragIdx !== realIdx
                                 ? "border-blue-400/50 bg-blue-400/8"
-                                : "border-transparent"
-                            } border-b border-b-blue-400/10 last:border-b-0`}
+                                : "border-transparent hover:bg-slate-800/20"
+                            } border-b border-b-slate-800/40 last:border-b-0`}
                           >
                             {!readOnly && (
-                              <span className={`mt-1.5 shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}>⠿</span>
+                              <span className={`shrink-0 select-none text-sm leading-none ${readOnly ? "text-slate-800 cursor-default" : "text-slate-700 hover:text-slate-500 cursor-grab active:cursor-grabbing"}`}>⠿</span>
                             )}
                             {editingBacklogTask?.task.title === item.task.title ? (
                               /* ── Inline edit form ── */
@@ -2082,7 +2140,7 @@ export default function ProjectDashboard() {
                               <>
                                 <div className="flex-1 min-w-0">
                                   <span className="text-[9px] text-slate-600 font-medium tracking-wide">{item.entryProject}</span>
-                                  <p className="text-sm text-slate-300 leading-snug">{item.task.title}</p>
+                                  <p className={`text-sm leading-snug ${isFocusedPlanned ? "text-slate-100 font-semibold" : "text-slate-300"}`}>{item.task.title}</p>
                                   {item.task.description && (
                                     <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">{item.task.description}</p>
                                   )}
@@ -2137,37 +2195,46 @@ export default function ProjectDashboard() {
                                     </div>
                                   )}
                                 </div>
-                                {!readOnly && (
-                                  <div className="flex items-center gap-1 shrink-0 mt-0.5">
-                                    <button
-                                      onClick={() => {
-                                        setEditingBacklogTask(item);
-                                        setBacklogEditForm({ title: item.task.title, description: item.task.description ?? "", priority: item.task.priority ?? "", complexity: item.task.complexity ?? "", type: item.task.type ?? "", project: item.entryProject });
-                                        setBacklogEditMedia((item.task.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" })));
-                                        setBacklogEditCompare((item.task.compare ?? []).map(c => ({ label: c.label ?? "", before: { file: null, preview: c.before.src, note: c.before.note }, after: { file: null, preview: c.after.src, note: c.after.note } })));
-                                        setBacklogEditFeatureId(item.task.featureId ?? null);
-                                      }}
-                                      className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
-                                      title="Edit task"
-                                    >
-                                      <Pencil size={12} />
-                                    </button>
-                                    <button
-                                      onClick={() => startPlannedTask(item)}
-                                      disabled={actionLoading === item.task.title}
-                                      className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
-                                    >
-                                      ▶ Start
-                                    </button>
-                                    <button
-                                      onClick={() => deleteBacklogTask(item)}
-                                      className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                                      title="Remove from backlog"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  </div>
-                                )}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    onClick={() => toggleFocus("planned", item.task.title)}
+                                    className={`p-1 rounded transition-colors ${isFocusedPlanned ? "text-cyan-400 bg-cyan-500/15" : "text-slate-600 hover:text-cyan-400/70"}`}
+                                    title={isFocusedPlanned ? "Remove focus" : "Focus this task"}
+                                  >
+                                    <Crosshair size={11} />
+                                  </button>
+                                  {!readOnly && (
+                                    <>
+                                      <button
+                                        onClick={() => {
+                                          setEditingBacklogTask(item);
+                                          setBacklogEditForm({ title: item.task.title, description: item.task.description ?? "", priority: item.task.priority ?? "", complexity: item.task.complexity ?? "", type: item.task.type ?? "", project: item.entryProject });
+                                          setBacklogEditMedia((item.task.media ?? []).map(m => ({ file: null, preview: m.src, caption: m.caption ?? "" })));
+                                          setBacklogEditCompare((item.task.compare ?? []).map(c => ({ label: c.label ?? "", before: { file: null, preview: c.before.src, note: c.before.note }, after: { file: null, preview: c.after.src, note: c.after.note } })));
+                                          setBacklogEditFeatureId(item.task.featureId ?? null);
+                                        }}
+                                        className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+                                        title="Edit task"
+                                      >
+                                        <Pencil size={12} />
+                                      </button>
+                                      <button
+                                        onClick={() => startPlannedTask(item)}
+                                        disabled={actionLoading === item.task.title}
+                                        className="text-[11px] px-2 py-1 rounded-lg border border-blue-400/30 text-blue-300 hover:bg-blue-400/10 transition-colors whitespace-nowrap disabled:opacity-40"
+                                      >
+                                        ▶ Start
+                                      </button>
+                                      <button
+                                        onClick={() => deleteBacklogTask(item)}
+                                        className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                                        title="Remove from backlog"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
                               </>
                             )}
                           </li>
@@ -4963,41 +5030,52 @@ function IssueDetailModal({
   );
 }
 
-function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle }: {
+function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle, focused, onFocus }: {
   issue: RaisedIssue;
   readOnly: boolean;
   onEdit: (i: RaisedIssue) => void;
   onDelete: (i: RaisedIssue) => void;
   onStart: (i: RaisedIssue) => void;
   onToggle: (i: RaisedIssue) => void;
+  focused?: boolean;
+  onFocus?: () => void;
 }) {
   const typeMeta = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
   const priorityMeta = PRIORITY_META[issue.priority];
   const resolved = issue.status === "resolved";
   const inProgress = issue.status === "in_progress";
   return (
-    <div className={`rounded-xl border px-4 py-3 flex flex-col gap-2 transition-colors ${resolved ? "border-slate-800/40 bg-slate-950/20 opacity-60" : inProgress ? "border-yellow-400/20 bg-yellow-400/5" : "border-slate-800 bg-slate-900/60"}`}>
+    <div className={`rounded-xl border px-4 py-3 flex flex-col gap-2 transition-colors ${focused ? "border-cyan-500/40 bg-cyan-500/8" : resolved ? "border-slate-800/40 bg-slate-950/20 opacity-60" : inProgress ? "border-yellow-400/20 bg-yellow-400/5" : "border-slate-800 bg-slate-900/60"}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium leading-snug ${resolved ? "line-through text-slate-500" : "text-slate-100"}`}>{issue.title}</p>
           {issue.description && <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>}
         </div>
-        {!readOnly && (
-          <div className="flex items-center gap-1 shrink-0">
-            {issue.status === "open" && (
-              <button onClick={() => onStart(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-yellow-700/40 text-yellow-400 hover:bg-yellow-400/10 transition-colors">
-                ▶ Start
-              </button>
-            )}
-            {!inProgress && (
-              <button onClick={() => onToggle(issue)} title={resolved ? "Reopen" : "Mark resolved"} className={`text-[10px] px-2 py-1 rounded-lg border transition-colors ${resolved ? "border-slate-700 text-slate-500 hover:text-emerald-400 hover:border-emerald-700/40" : "border-emerald-700/40 text-emerald-400 hover:bg-emerald-400/10"}`}>
-                {resolved ? "Reopen" : "✓ Resolve"}
-              </button>
-            )}
-            <button onClick={() => onEdit(issue)} className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"><Pencil size={12} /></button>
-            <button onClick={() => onDelete(issue)} className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"><Trash2 size={12} /></button>
-          </div>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={onFocus}
+            className={`p-1 rounded transition-colors ${focused ? "text-cyan-400 bg-cyan-500/15" : "text-slate-600 hover:text-cyan-400/70"}`}
+            title={focused ? "Remove focus" : "Focus this issue"}
+          >
+            <Crosshair size={12} />
+          </button>
+          {!readOnly && (
+            <>
+              {issue.status === "open" && (
+                <button onClick={() => onStart(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-yellow-700/40 text-yellow-400 hover:bg-yellow-400/10 transition-colors">
+                  ▶ Start
+                </button>
+              )}
+              {!inProgress && (
+                <button onClick={() => onToggle(issue)} title={resolved ? "Reopen" : "Mark resolved"} className={`text-[10px] px-2 py-1 rounded-lg border transition-colors ${resolved ? "border-slate-700 text-slate-500 hover:text-emerald-400 hover:border-emerald-700/40" : "border-emerald-700/40 text-emerald-400 hover:bg-emerald-400/10"}`}>
+                  {resolved ? "Reopen" : "✓ Resolve"}
+                </button>
+              )}
+              <button onClick={() => onEdit(issue)} className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"><Pencil size={12} /></button>
+              <button onClick={() => onDelete(issue)} className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"><Trash2 size={12} /></button>
+            </>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${typeMeta.text} ${typeMeta.bg}`}>{typeMeta.label}</span>
