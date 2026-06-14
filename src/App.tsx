@@ -607,8 +607,6 @@ export default function ProjectDashboard() {
     if (loading || readOnly) return;
 
     const today = new Date().toISOString().slice(0, 10);
-    const lastAutoGen = localStorage.getItem("vc-auto-gen-date");
-    if (lastAutoGen === today) return;
 
     // Collect unique in-progress tasks (deduplicated by title)
     const seen = new Set<string>();
@@ -622,10 +620,7 @@ export default function ProjectDashboard() {
       }
     }
 
-    if (progressTasks.length === 0) {
-      localStorage.setItem("vc-auto-gen-date", today);
-      return;
-    }
+    if (progressTasks.length === 0) return;
 
     // Check which in-progress tasks are already in today's entry
     const todayEntry = entries.find((e) => e.date === today);
@@ -634,10 +629,7 @@ export default function ProjectDashboard() {
     );
     const missing = progressTasks.filter((p) => !todayProgressTitles.has(p.task.title));
 
-    if (missing.length === 0) {
-      localStorage.setItem("vc-auto-gen-date", today);
-      return;
-    }
+    if (missing.length === 0) return;
 
     const newTasks: Task[] = missing.map((p) => p.task);
     if (todayEntry) {
@@ -651,7 +643,6 @@ export default function ProjectDashboard() {
             setEntries((prev) =>
               prev.map((e) => e.id === todayEntry.id ? { ...e, tasks: updatedTasks } : e),
             );
-            localStorage.setItem("vc-auto-gen-date", today);
           }
         });
     } else {
@@ -671,7 +662,6 @@ export default function ProjectDashboard() {
         .then(({ error }) => {
           if (!error) {
             setEntries((prev) => [newEntry, ...prev]);
-            localStorage.setItem("vc-auto-gen-date", today);
           }
         });
     }
@@ -727,11 +717,18 @@ export default function ProjectDashboard() {
   }, [entries, project, type, status, search, dateFrom, dateTo]);
 
   const inProgressItems = useMemo<InProgressItem[]>(() => {
+    const plannedTitles = new Set<string>();
+    entries.forEach((e) => {
+      e.tasks.forEach((t) => {
+        if (t.status === "planned") plannedTitles.add(t.title);
+      });
+    });
+
     const seen = new Map<string, InProgressItem>();
     const all: InProgressItem[] = [];
     entries.forEach((e) => {
       e.tasks.forEach((t) => {
-        if (t.status === "progress") {
+        if (t.status === "progress" && !plannedTitles.has(t.title)) {
           all.push({
             entryId: e.id,
             entryTitle: e.title,
@@ -4070,8 +4067,8 @@ function EntryCard({
 }) {
   const visibleTasks =
     activeType === "all"
-      ? entry.tasks
-      : entry.tasks.filter((t) => (t.type ?? "task") === activeType);
+      ? entry.tasks.filter((t) => t.status !== "planned")
+      : entry.tasks.filter((t) => t.status !== "planned" && (t.type ?? "task") === activeType);
   const displayedTasks = visibleTasks.slice(0, 3);
   const hiddenCount = visibleTasks.length - displayedTasks.length;
   const derived = deriveEntryStatus(entry.tasks);
@@ -5133,11 +5130,16 @@ function CompletedPanel({
     return { from: "", to: "" };
   }, [dateRange, customFrom, customTo]);
 
-  const allDoneTasks = useMemo<DoneTask[]>(() =>
-    entries.flatMap(e =>
+  const allDoneTasks = useMemo<DoneTask[]>(() => {
+    const all = entries.flatMap(e =>
       e.tasks.filter(t => t.status === "done").map(t => ({ ...t, date: e.date, project: e.project, entryTitle: e.title, entryId: e.id }))
-    ).sort((a, b) => b.date.localeCompare(a.date)),
-  [entries]);
+    ).sort((a, b) => b.date.localeCompare(a.date));
+    const seen = new Map<string, DoneTask>();
+    for (const t of all) {
+      if (!seen.has(t.title)) seen.set(t.title, t);
+    }
+    return Array.from(seen.values());
+  }, [entries]);
 
   const resolvedIssues = useMemo(() => [...issues.filter(i => i.status === "resolved")].sort((a, b) => (b.date_resolved ?? b.date_raised).localeCompare(a.date_resolved ?? a.date_raised)), [issues]);
 
@@ -5314,7 +5316,7 @@ function CompletedPanel({
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-slate-200 leading-snug">{task.title}</p>
                         <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                          <span className="text-[10px] font-mono text-slate-600">{task.date}</span>
+                          <span className="text-[10px] font-mono text-slate-600">{task.dateRange ?? task.date}</span>
                           <span className="text-slate-700">·</span>
                           <span className="text-[10px] text-slate-500">{task.project}</span>
                           {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
