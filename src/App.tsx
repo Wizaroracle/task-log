@@ -3,14 +3,11 @@ import type { ComponentType } from "react";
 import {
   CheckCircle2,
   Bug,
-  Search,
   Folder,
   Image as ImageIcon,
   Video as VideoIcon,
   ArrowRight,
   X,
-  LayoutGrid,
-  CalendarRange,
   Building2,
   FolderKanban,
   ArrowUpNarrowWide,
@@ -27,12 +24,12 @@ import {
   BarChart2,
   Save,
   TrendingUp,
-  Sparkles,
   Filter,
   ChevronUp,
   ChevronDown,
   GitCommitHorizontal,
   Crosshair,
+  Rocket,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
 import type { CompareItem, Entry, EntryMedia, Feature, RaisedIssue, Task } from "./utils/entries/entries";
@@ -234,22 +231,27 @@ function formatDate(iso: string): string {
 }
 
 const WIZARD_PASSWORD = import.meta.env.VITE_PASSWORD;
+
+// Shared types used by the dashboard and WeeklyReportModal
+type CompletedTaskItem = Task & { entryId: string; entryProject: string; entryDate: string };
+type CPRow = { kind: "task"; item: CompletedTaskItem } | { kind: "issue"; item: RaisedIssue };
+type SavedReport = {
+  id: string;
+  title: string;
+  date_label: string;
+  items_snapshot: CPRow[];
+  created_at: string;
+};
+
 // ════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ════════════════════════════════════════════════════════════════════
 export default function ProjectDashboard() {
-  const [project, setProject] = useState("all");
-  const [type, setType] = useState("all");
-  const [status, setStatus] = useState("all");
-  const [search, setSearch] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [formSeedTask, setFormSeedTask] = useState<Task | null>(null);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddSaving, setQuickAddSaving] = useState(false);
@@ -291,7 +293,20 @@ export default function ProjectDashboard() {
   const [backlogTypeFilter, setBacklogTypeFilter] = useState("all");
   const [backlogPage, setBacklogPage] = useState(1);
   const [inProgressPage, setInProgressPage] = useState(1);
-  const [page, setPage] = useState(1);
+  const [completedPage, setCompletedPage] = useState(1);
+  const [completedDateRange, setCompletedDateRange] = useState<"week" | "month" | "all" | "custom">("week");
+  const [completedDateFrom, setCompletedDateFrom] = useState("");
+  const [completedDateTo, setCompletedDateTo] = useState("");
+  const [completedTypeFilter, setCompletedTypeFilter] = useState<"all" | "tasks" | "issues">("all");
+  const [completedFeatureFilter, setCompletedFeatureFilter] = useState<string>("all");
+  // "Done" action menu — tracks which task title has the popup open
+  const [doneMenuTask, setDoneMenuTask] = useState<string | null>(null);
+  // Issue resolve menu — tracks which issue id has the popup open
+  const [resolveMenuIssue, setResolveMenuIssue] = useState<string | null>(null);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportItems, setReportItems] = useState<CPRow[]>([]);
+  const [reportDateLabel, setReportDateLabel] = useState("");
+  const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [zoomSrc, setZoomSrc] = useState<string | null>(null);
@@ -304,8 +319,6 @@ export default function ProjectDashboard() {
   const [wizardInput, setWizardInput] = useState("");
   const [wizardError, setWizardError] = useState(false);
 
-  // Completed panel
-  const [completedOpen, setCompletedOpen] = useState(false);
 
   // Stats + heatmap collapse
   const [statsOpen, setStatsOpen] = useState(true);
@@ -374,6 +387,7 @@ export default function ProjectDashboard() {
 
   // Raised Issues — report modal
   const [issuesOpen, setIssuesOpen] = useState(false);
+  const [allTasksOpen, setAllTasksOpen] = useState(false);
   const [issues, setIssues] = useState<RaisedIssue[]>([]);
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [issuesProjectFilter, setIssuesProjectFilter] = useState("all");
@@ -400,6 +414,9 @@ export default function ProjectDashboard() {
   const [backlogEditMedia, setBacklogEditMedia] = useState<Array<{ file: File | null; preview: string; caption: string }>>([]);
   const [backlogEditCompare, setBacklogEditCompare] = useState<Array<{ label: string; before: { file: File | null; preview: string; note: string }; after: { file: File | null; preview: string; note: string } }>>([]);
   const [backlogEditSaving, setBacklogEditSaving] = useState(false);
+  const [editingDoneTask, setEditingDoneTask] = useState<CompletedTaskItem | null>(null);
+  const [doneEditForm, setDoneEditForm] = useState<{ title: string; description: string; priority: string; complexity: string; type: string; project: string }>({ title: "", description: "", priority: "", complexity: "", type: "", project: "" });
+  const [doneEditSaving, setDoneEditSaving] = useState(false);
 
   const requestWizardMode = () => {
     if (!readOnly) {
@@ -558,6 +575,21 @@ export default function ProjectDashboard() {
     }
   }
 
+  async function markIssueForDeployment(issue: RaisedIssue) {
+    const patch: Partial<RaisedIssue> = { status: "deployment" };
+    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+    if (!error) setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, ...patch } : i));
+  }
+
+  async function markIssueDeployed(issue: RaisedIssue) {
+    const patch: Partial<RaisedIssue> = { status: "resolved", date_resolved: new Date().toISOString().slice(0, 10) };
+    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+    if (!error) {
+      setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, ...patch } : i));
+      fireCompletionToast(undefined, true);
+    }
+  }
+
   // ── Backlog task inline edit ─────────────────────────────────────
   async function saveBacklogEdit() {
     if (!editingBacklogTask || !backlogEditForm.title.trim()) return;
@@ -611,6 +643,38 @@ export default function ProjectDashboard() {
     }
   }
 
+  async function saveDoneTaskEdit() {
+    if (!editingDoneTask || !doneEditForm.title.trim()) return;
+    const entry = entries.find((e) => e.id === editingDoneTask.entryId);
+    if (!entry) return;
+    setDoneEditSaving(true);
+    try {
+      const updatedTasks = entry.tasks.map((t) =>
+        t.title === editingDoneTask.title && t.status === "done"
+          ? {
+              ...t,
+              title: doneEditForm.title.trim(),
+              ...(doneEditForm.description.trim() ? { description: doneEditForm.description.trim() } : { description: undefined }),
+              type: (doneEditForm.type || undefined) as Task["type"],
+              priority: (doneEditForm.priority || undefined) as Task["priority"],
+              complexity: (doneEditForm.complexity || undefined) as Task["complexity"],
+            }
+          : t,
+      );
+      const updates: Record<string, unknown> = { tasks: updatedTasks };
+      if (doneEditForm.project && doneEditForm.project !== entry.project) {
+        updates.project = doneEditForm.project;
+      }
+      const { error } = await supabase.from("entries").update(updates).eq("id", entry.id);
+      if (!error) {
+        setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, ...updates, tasks: updatedTasks } : e));
+        setEditingDoneTask(null);
+      }
+    } finally {
+      setDoneEditSaving(false);
+    }
+  }
+
   useEffect(() => {
     supabase
       .from("entries")
@@ -618,77 +682,16 @@ export default function ProjectDashboard() {
       .order("date", { ascending: false })
       .then(({ data, error }) => {
         if (!error && data) setEntries(data as Entry[]);
-        setLoading(false);
       });
   }, []);
 
   useEffect(() => { loadIssues(); }, []);
   useEffect(() => { loadFeatures(); }, []);
-
-  // Auto-generate a card for today when in-progress tasks exist from a previous day
   useEffect(() => {
-    if (loading || readOnly) return;
+    supabase.from("weekly_reports").select("*").order("created_at", { ascending: false })
+      .then(({ data, error }) => { if (!error && data) setSavedReports(data as SavedReport[]); });
+  }, []);
 
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Collect unique in-progress tasks (deduplicated by title)
-    const seen = new Set<string>();
-    const progressTasks: Array<{ task: Task; project: Entry["project"]; sourceTitle: string }> = [];
-    for (const e of entries) {
-      for (const t of e.tasks) {
-        if (t.status === "progress" && !seen.has(t.title)) {
-          seen.add(t.title);
-          progressTasks.push({ task: t, project: e.project, sourceTitle: e.title });
-        }
-      }
-    }
-
-    if (progressTasks.length === 0) return;
-
-    // Check which in-progress tasks are already in today's entry
-    const todayEntry = entries.find((e) => e.date === today);
-    const todayProgressTitles = new Set(
-      (todayEntry?.tasks ?? []).filter((t) => t.status === "progress").map((t) => t.title),
-    );
-    const missing = progressTasks.filter((p) => !todayProgressTitles.has(p.task.title));
-
-    if (missing.length === 0) return;
-
-    const newTasks: Task[] = missing.map((p) => p.task);
-    if (todayEntry) {
-      const updatedTasks = [...todayEntry.tasks, ...newTasks];
-      supabase
-        .from("entries")
-        .update({ tasks: updatedTasks })
-        .eq("id", todayEntry.id)
-        .then(({ error }) => {
-          if (!error) {
-            setEntries((prev) =>
-              prev.map((e) => e.id === todayEntry.id ? { ...e, tasks: updatedTasks } : e),
-            );
-          }
-        });
-    } else {
-      const uniqueSources = [...new Set(missing.map((p) => p.sourceTitle))];
-      const entryTitle = uniqueSources.length === 1 ? uniqueSources[0] : "In Progress Tasks";
-      const project = missing[0].project;
-      const newEntry: Entry = {
-        id: crypto.randomUUID(),
-        project,
-        date: today,
-        title: entryTitle,
-        tasks: newTasks,
-      };
-      supabase
-        .from("entries")
-        .insert(newEntry)
-        .then(({ error }) => {
-          if (!error) {
-            setEntries((prev) => [newEntry, ...prev]);
-          }
-        });
-    }
-  }, [loading, readOnly, entries]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -699,45 +702,9 @@ export default function ProjectDashboard() {
   }, []);
 
   useEffect(() => {
-    setPage(1);
-  }, [project, type, status, search, dateFrom, dateTo]);
-
-  useEffect(() => {
     setBacklogPage(1);
   }, [backlogTagFilter, backlogPriorityFilter, backlogComplexityFilter, backlogTypeFilter]);
 
-  const projects = useMemo(
-    () => Array.from(new Set(entries.map((e) => e.project))),
-    [entries],
-  );
-
-  const filtered = useMemo(() => {
-    return entries
-      .filter((e) => {
-        if (e.tasks.length > 0 && e.tasks.every((t) => t.status === "planned"))
-          return false;
-        if (project !== "all" && e.project !== project) return false;
-        if (type !== "all" && !e.tasks.some((t) => t.type === type))
-          return false;
-        if (status !== "all" && deriveEntryStatus(e.tasks) !== status)
-          return false;
-        if (dateFrom && e.date < dateFrom) return false;
-        if (dateTo && e.date > dateTo) return false;
-        if (search.trim()) {
-          const q = search.toLowerCase();
-          const hay = (
-            e.title +
-            " " +
-            e.tasks.map((t) => t.title).join(" ") +
-            " " +
-            (e.tags || []).join(" ")
-          ).toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [entries, project, type, status, search, dateFrom, dateTo]);
 
   const inProgressItems = useMemo<InProgressItem[]>(() => {
     const plannedTitles = new Set<string>();
@@ -802,6 +769,40 @@ export default function ProjectDashboard() {
     return Array.from(seen.values());
   }, [entries]);
 
+  const deploymentItems = useMemo<InProgressItem[]>(() => {
+    const seen = new Map<string, InProgressItem>();
+    entries.forEach((e) => {
+      e.tasks.forEach((t) => {
+        if (t.status === "deployment" && !seen.has(t.title)) {
+          seen.set(t.title, { entryId: e.id, entryTitle: e.title, entryDate: e.date, entryProject: e.project, task: t });
+        }
+      });
+    });
+    return Array.from(seen.values());
+  }, [entries]);
+
+  const deploymentIssues = useMemo(() => issues.filter(i => i.status === "deployment"), [issues]);
+
+  const completedItems = useMemo<CompletedTaskItem[]>(() => {
+    const all = entries.flatMap((e) =>
+      e.tasks
+        .filter((t) => t.status === "done")
+        .map((t) => ({ ...t, entryId: e.id, entryProject: e.project, entryDate: e.date })),
+    ).sort((a, b) => b.entryDate.localeCompare(a.entryDate));
+    const seen = new Map<string, CompletedTaskItem>();
+    for (const t of all) {
+      if (!seen.has(t.title)) seen.set(t.title, t);
+    }
+    return Array.from(seen.values());
+  }, [entries]);
+
+  const resolvedIssues = useMemo(
+    () => [...issues.filter((i) => i.status === "resolved")].sort((a, b) =>
+      (b.date_resolved ?? b.date_raised).localeCompare(a.date_resolved ?? a.date_raised),
+    ),
+    [issues],
+  );
+
   const PRIORITY_ORDER: Record<string, number> = { urgent: 0, major: 1, minor: 2 };
 
   // Feature progress stats — counts across all entries per feature
@@ -843,25 +844,18 @@ export default function ProjectDashboard() {
   }, [plannedItems, backlogTagFilter, backlogPriorityFilter, backlogComplexityFilter, backlogTypeFilter, featureTabFilter]);
 
   const stats = useMemo(() => {
-    const base =
-      project === "all"
-        ? entries
-        : entries.filter((e) => e.project === project);
-    const allTasks = base.flatMap((e) => e.tasks);
-    const resolvedIssueCount = issues.filter(
-      (i) => i.status === "resolved" && (project === "all" || i.project === project)
-    ).length;
+    const resolvedIssueCount = resolvedIssues.length;
     return {
-      total: allTasks.length,
-      features: allTasks.filter((t) => t.type === "feature").length,
-      bugs: allTasks.filter((t) => t.type === "bugfix").length + resolvedIssueCount,
-      optimized: allTasks.filter((t) => t.type === "optimized").length,
-      tasks: allTasks.filter((t) => (t.type ?? "task") === "task").length,
-      milestones: allTasks.filter((t) => t.type === "milestone").length,
-      refactors: allTasks.filter((t) => t.type === "refactor").length,
-      learnings: allTasks.filter((t) => t.type === "learning").length,
+      total: completedItems.length + resolvedIssueCount,
+      features: completedItems.filter(t => t.type === "feature").length,
+      bugs: completedItems.filter(t => t.type === "bugfix").length + resolvedIssueCount,
+      optimized: completedItems.filter(t => t.type === "optimized").length,
+      tasks: completedItems.filter(t => (t.type ?? "task") === "task").length,
+      milestones: completedItems.filter(t => t.type === "milestone").length,
+      refactors: completedItems.filter(t => t.type === "refactor").length,
+      learnings: completedItems.filter(t => t.type === "learning").length,
     };
-  }, [entries, issues, project]);
+  }, [completedItems, resolvedIssues]);
 
 
   function formatDateShort(iso: string): string {
@@ -911,6 +905,67 @@ export default function ProjectDashboard() {
     }
   }
 
+  async function markForDeployment(taskTitle: string) {
+    setActionLoading(taskTitle);
+    const affected = entries.filter(e => e.tasks.some(t => t.title === taskTitle && t.status === "progress"));
+    try {
+      for (const entry of affected) {
+        const updatedTasks = entry.tasks.map(t =>
+          t.title === taskTitle && t.status === "progress" ? { ...t, status: "deployment" as const } : t,
+        );
+        const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
+        if (!error) setEntries(prev => prev.map(e => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function revertDeploymentToProgress(taskTitle: string) {
+    setActionLoading(taskTitle);
+    const affected = entries.filter(e => e.tasks.some(t => t.title === taskTitle && t.status === "deployment"));
+    try {
+      for (const entry of affected) {
+        const updatedTasks = entry.tasks.map(t =>
+          t.title === taskTitle && t.status === "deployment" ? { ...t, status: "progress" as const } : t,
+        );
+        const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
+        if (!error) setEntries(prev => prev.map(e => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function revertIssueDeploymentToProgress(issue: RaisedIssue) {
+    const patch: Partial<RaisedIssue> = { status: "in_progress" };
+    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+    if (!error) setIssues(prev => prev.map(i => i.id === issue.id ? { ...i, ...patch } : i));
+  }
+
+  async function markDeployed(taskTitle: string) {
+    setActionLoading(taskTitle);
+    const today = new Date().toISOString().slice(0, 10);
+    const affected = entries.filter(e => e.tasks.some(t => t.title === taskTitle && t.status === "deployment"))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    if (affected.length === 0) { setActionLoading(null); return; }
+    const startDate = affected[0].date;
+    const dateRange = startDate === today ? formatDateShort(today) : `${formatDateShort(startDate)} → ${formatDateShort(today)}`;
+    const taskMeta = affected[0].tasks.find(t => t.title === taskTitle && t.status === "deployment");
+    try {
+      for (const entry of affected) {
+        const updatedTasks = entry.tasks.map(t =>
+          t.title === taskTitle && t.status === "deployment" ? { ...t, status: "done" as const, dateRange } : t,
+        );
+        const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
+        if (!error) setEntries(prev => prev.map(e => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
+      }
+      fireCompletionToast(taskMeta);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   async function markTaskPlanned(taskTitle: string) {
     setActionLoading(taskTitle);
     const affected = entries.filter((e) =>
@@ -941,88 +996,48 @@ export default function ProjectDashboard() {
 
   async function startPlannedTask(item: InProgressItem) {
     setActionLoading(item.task.title);
-    const today = new Date().toISOString().slice(0, 10);
     const sourceEntry = entries.find((e) => e.id === item.entryId);
     if (!sourceEntry) { setActionLoading(null); return; }
-
-    const taskAsProgress: Task = { ...item.task, status: "progress" };
-
     try {
-      // Snapshot to accumulate all mutations, applied in one setEntries call at the end
-      let snap = [...entries];
-      const applyUpdate = (id: string, tasks: Task[], date?: string) => {
-        snap = snap.map(e => e.id === id ? { ...e, tasks, ...(date ? { date } : {}) } : e);
-      };
-      const applyDelete = (id: string) => { snap = snap.filter(e => e.id !== id); };
+      const updatedTasks = sourceEntry.tasks.map((t) =>
+        t.title === item.task.title && t.status === "planned"
+          ? { ...t, status: "progress" as const }
+          : t,
+      );
+      const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", sourceEntry.id);
+      if (!error) setEntries((prev) => prev.map((e) => e.id === sourceEntry.id ? { ...e, tasks: updatedTasks } : e));
+    } finally {
+      setActionLoading(null);
+    }
+  }
 
-      // Find today's consolidation entry (dated today, not the source)
-      const todayEntry = entries.find(e => e.date === today && e.id !== item.entryId);
-
-      if (sourceEntry.date === today) {
-        // Source is already today — just flip status in place
-        const updated = sourceEntry.tasks.map(t =>
-          t.title === item.task.title && t.status === "planned" ? taskAsProgress : t
+  async function reopenDoneTask(taskTitle: string) {
+    setActionLoading(taskTitle);
+    const affected = entries.filter((e) => e.tasks.some((t) => t.title === taskTitle && t.status === "done"));
+    try {
+      for (const entry of affected) {
+        const updatedTasks = entry.tasks.map((t) =>
+          t.title === taskTitle && t.status === "done" ? { ...t, status: "progress" as const, dateRange: undefined } : t,
         );
-        await supabase.from("entries").update({ tasks: updated }).eq("id", sourceEntry.id);
-        applyUpdate(sourceEntry.id, updated);
-
-      } else if (todayEntry) {
-        // Consolidate: add task to today's existing entry (deduplicated)
-        if (!todayEntry.tasks.some(t => t.title === item.task.title)) {
-          const newTasks = [...todayEntry.tasks, taskAsProgress];
-          await supabase.from("entries").update({ tasks: newTasks }).eq("id", todayEntry.id);
-          applyUpdate(todayEntry.id, newTasks);
-        }
-        // Remove task from source entry; delete source if it becomes empty
-        const remainingSource = sourceEntry.tasks.filter(
-          t => !(t.title === item.task.title && t.status === "planned")
-        );
-        if (remainingSource.length === 0) {
-          await supabase.from("entries").delete().eq("id", sourceEntry.id);
-          applyDelete(sourceEntry.id);
-        } else {
-          await supabase.from("entries").update({ tasks: remainingSource }).eq("id", sourceEntry.id);
-          applyUpdate(sourceEntry.id, remainingSource);
-        }
-
-      } else {
-        // No today's entry — check how many tasks remain in source after removing this one
-        const remainingSource = sourceEntry.tasks.filter(
-          t => !(t.title === item.task.title && t.status === "planned")
-        );
-        if (remainingSource.length === 0) {
-          // Source only had this task → repurpose it as today's entry
-          await supabase.from("entries").update({ tasks: [taskAsProgress], date: today }).eq("id", sourceEntry.id);
-          applyUpdate(sourceEntry.id, [taskAsProgress], today);
-        } else {
-          // Source has other tasks → trim source, create a fresh today entry
-          await supabase.from("entries").update({ tasks: remainingSource }).eq("id", sourceEntry.id);
-          applyUpdate(sourceEntry.id, remainingSource);
-          const { data: inserted } = await supabase
-            .from("entries")
-            .insert({ project: sourceEntry.project, date: today, title: sourceEntry.title, tasks: [taskAsProgress] })
-            .select()
-            .single();
-          if (inserted) snap = [...snap, inserted as Entry];
-        }
+        const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
+        if (!error) setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
       }
+    } finally {
+      setActionLoading(null);
+    }
+  }
 
-      // Remove any other "planned" duplicates of this task across remaining entries
-      const skipIds = new Set([item.entryId, todayEntry?.id].filter(Boolean) as string[]);
-      for (const e of entries.filter(en => !skipIds.has(en.id))) {
-        const hasDuplicate = e.tasks.some(t => t.title === item.task.title && t.status === "planned");
-        if (!hasDuplicate) continue;
-        const cleaned = e.tasks.filter(t => !(t.title === item.task.title && t.status === "planned"));
-        if (cleaned.length === 0) {
-          await supabase.from("entries").delete().eq("id", e.id);
-          applyDelete(e.id);
-        } else {
-          await supabase.from("entries").update({ tasks: cleaned }).eq("id", e.id);
-          applyUpdate(e.id, cleaned);
-        }
+  async function moveDoneToPlanned(taskTitle: string) {
+    setActionLoading(taskTitle);
+    const affected = entries.filter((e) => e.tasks.some((t) => t.title === taskTitle && t.status === "done"));
+    try {
+      for (const entry of affected) {
+        const updatedTasks = entry.tasks.map((t) =>
+          t.title === taskTitle && t.status === "done" ? { ...t, status: "planned" as const, dateRange: undefined } : t,
+        );
+        const { error } = await supabase.from("entries").update({ tasks: updatedTasks }).eq("id", entry.id);
+        if (!error) setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, tasks: updatedTasks } : e));
       }
-
-      setEntries(snap);
     } finally {
       setActionLoading(null);
     }
@@ -1154,9 +1169,6 @@ export default function ProjectDashboard() {
     }
   }
 
-  const hasFilters =
-    project !== "all" || type !== "all" || search.trim() || dateFrom || dateTo;
-
   return (
     <div className="relative min-h-screen w-full bg-slate-950 text-slate-100 overflow-hidden">
       <BackgroundDecor />
@@ -1173,25 +1185,21 @@ export default function ProjectDashboard() {
             </h1>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2 shrink-0 max-w-[55%] sm:max-w-none">
-            {(() => {
-              const doneCount = entries.flatMap(e => e.tasks).filter(t => t.status === "done").length
-                + issues.filter(i => i.status === "resolved").length;
-              return (
-                <button
-                  onClick={() => setCompletedOpen(true)}
-                  className="relative flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:10ms]"
-                  title="Completed Work"
-                >
-                  <CheckCircle2 size={14} />
-                  <span className="hidden sm:inline">Completed</span>
-                  {doneCount > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center min-w-4.5 h-4.5 rounded-full bg-emerald-700 text-white text-[9px] font-bold px-1 leading-none">
-                      {doneCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })()}
+            <button
+              onClick={() => setAllTasksOpen(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:15ms]"
+              title="All completed tasks"
+            >
+              <CheckCircle2 size={14} />
+              <span className="hidden sm:inline">All Tasks</span>
+            </button>
+            {(deploymentItems.length + deploymentIssues.length) > 0 && (
+              <span className="flex items-center gap-1.5 text-xs text-amber-400/90 font-medium px-2.5 py-2 sm:px-3 sm:py-2.5 rounded-xl bg-amber-400/8 border border-amber-400/25 animate-fade-in-up [animation-delay:18ms]">
+                <Rocket size={13} />
+                <span className="hidden sm:inline">{deploymentItems.length + deploymentIssues.length} deploying</span>
+                <span className="sm:hidden font-mono text-[11px]">{deploymentItems.length + deploymentIssues.length}</span>
+              </span>
+            )}
             <button
               onClick={() => setIssuesOpen(true)}
               className="relative flex items-center gap-1.5 rounded-xl border border-red-700/40 bg-red-400/10 text-red-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-red-400/20 transition-colors animate-fade-in-up [animation-delay:20ms]"
@@ -1215,15 +1223,6 @@ export default function ProjectDashboard() {
                 </span>
               ) : null;
             })()}
-            {!readOnly && (
-              <button
-                onClick={() => setFormOpen(true)}
-                className="flex items-center gap-1.5 rounded-xl border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 text-xs font-medium px-2.5 py-2 sm:px-4 sm:py-2.5 hover:bg-emerald-400/20 transition-colors animate-fade-in-up [animation-delay:40ms]"
-              >
-                <Plus size={14} />
-                <span className="hidden sm:inline">New Entry</span>
-              </button>
-            )}
             <ProfileButton
               open={profileOpen}
               onToggle={() => setProfileOpen((o) => !o)}
@@ -1269,7 +1268,7 @@ export default function ProjectDashboard() {
               {(readOnly || statsOpen) && (
                 <div className="flex-1 min-w-0">
                   <section className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    <StatCard label="Total Tasks" value={stats.total}      accent="border-green-400/60"   accentBg="bg-green-400/8"    icon={CheckCircle2}      iconColor="text-green-400"   glowColor="rgba(74,222,128,0.45)"   delay={0}   />
+                    <StatCard label="Total Done"  value={stats.total}      accent="border-green-400/60"   accentBg="bg-green-400/8"    icon={CheckCircle2}      iconColor="text-green-400"   glowColor="rgba(74,222,128,0.45)"   delay={0}   />
                     <StatCard label="Features"    value={stats.features}   accent="border-emerald-400/60" accentBg="bg-emerald-400/8"  icon={ArrowUpNarrowWide} iconColor="text-emerald-400" glowColor="rgba(52,211,153,0.45)"   delay={40}  />
                     <StatCard label="Bug Fixes"   value={stats.bugs}       accent="border-orange-400/60"  accentBg="bg-orange-400/8"   icon={Bug}               iconColor="text-orange-400"  glowColor="rgba(251,146,60,0.45)"   delay={80}  />
                     <StatCard label="Optimized"   value={stats.optimized}  accent="border-cyan-400/60"    accentBg="bg-cyan-400/8"     icon={Zap}               iconColor="text-cyan-400"    glowColor="rgba(34,211,238,0.45)"   delay={120} />
@@ -1331,6 +1330,86 @@ export default function ProjectDashboard() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ── Deployment Panel ──────────────────────────────── */}
+        {(deploymentItems.length > 0 || deploymentIssues.length > 0) && (
+          <div className="mb-6">
+            <section className="rounded-2xl border border-amber-400/40 bg-slate-900/60 backdrop-blur-sm p-4" style={{ boxShadow: "0 0 32px rgba(251,191,36,0.10)" }}>
+              {/* Header */}
+              <div className="flex items-center gap-2 mb-4">
+                <Rocket size={13} className="text-amber-400 shrink-0" />
+                <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-amber-400">For Deployment</span>
+                <span className="text-[10px] text-amber-600">{deploymentItems.length + deploymentIssues.length} item{deploymentItems.length + deploymentIssues.length !== 1 ? "s" : ""}</span>
+              </div>
+              {/* Grid aligned with stats cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
+                {deploymentItems.map((item) => {
+                  const tm = TYPE_META[(item.task.type ?? "task") as keyof typeof TYPE_META] ?? TYPE_META.task;
+                  const TIcon = tm.icon;
+                  return (
+                    <div key={`t-${item.task.title}`} className="flex flex-col gap-2 p-3 rounded-xl border border-amber-400/25 bg-amber-400/6 hover:border-amber-400/40 transition-colors">
+                      {/* Badges */}
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <span className="text-[9px] text-amber-600/80 font-medium">{item.entryProject}</span>
+                        <span className={`flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}><TIcon size={8} />{tm.label}</span>
+                        {item.task.priority && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${PRIORITY_META[item.task.priority].text} ${PRIORITY_META[item.task.priority].bg}`}>{PRIORITY_META[item.task.priority].label}</span>}
+                        <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-sky-400 bg-sky-400/10">Task</span>
+                      </div>
+                      {/* Title */}
+                      <p className="text-[12px] font-semibold text-amber-100 leading-snug flex-1">{item.task.title}</p>
+                      {item.task.description && <p className="text-[10px] text-amber-700/60 truncate">{item.task.description}</p>}
+                      {/* Actions */}
+                      {!readOnly && (
+                        <div className="flex gap-1.5 mt-auto pt-1">
+                          <button onClick={() => markDeployed(item.task.title)} disabled={actionLoading === item.task.title}
+                            className="flex-1 text-[10px] py-1.5 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-300 hover:bg-amber-400/30 transition-colors disabled:opacity-40 font-medium">
+                            🚀 Deployed
+                          </button>
+                          <button onClick={() => revertDeploymentToProgress(item.task.title)} disabled={actionLoading === item.task.title}
+                            className="text-[10px] px-2 py-1.5 rounded-lg border border-slate-700 text-slate-500 hover:text-yellow-400 hover:border-yellow-700/40 transition-colors disabled:opacity-40 whitespace-nowrap"
+                            title="Move back to In Progress">
+                            ↩ In Progress
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {deploymentIssues.map((issue) => {
+                  const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+                  return (
+                    <div key={`i-${issue.id}`} className="flex flex-col gap-2 p-3 rounded-xl border border-amber-400/25 bg-amber-400/6 hover:border-amber-400/40 transition-colors">
+                      {/* Badges */}
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <span className="text-[9px] text-amber-600/80 font-medium">{issue.project}</span>
+                        <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                        {PRIORITY_META[issue.priority] && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${PRIORITY_META[issue.priority].text} ${PRIORITY_META[issue.priority].bg}`}>{PRIORITY_META[issue.priority].label}</span>}
+                        <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-violet-400 bg-violet-400/10">Issue</span>
+                      </div>
+                      {/* Title */}
+                      <p className="text-[12px] font-semibold text-amber-100 leading-snug flex-1">{issue.title}</p>
+                      {issue.description && <p className="text-[10px] text-amber-700/60 truncate">{issue.description}</p>}
+                      {/* Actions */}
+                      {!readOnly && (
+                        <div className="flex gap-1.5 mt-auto pt-1">
+                          <button onClick={() => markIssueDeployed(issue)}
+                            className="flex-1 text-[10px] py-1.5 rounded-lg bg-amber-400/20 border border-amber-400/40 text-amber-300 hover:bg-amber-400/30 transition-colors font-medium">
+                            🚀 Deployed
+                          </button>
+                          <button onClick={() => revertIssueDeploymentToProgress(issue)}
+                            className="text-[10px] px-2 py-1.5 rounded-lg border border-slate-700 text-slate-500 hover:text-yellow-400 hover:border-yellow-700/40 transition-colors whitespace-nowrap"
+                            title="Move back to In Progress">
+                            ↩ In Progress
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           </div>
         )}
 
@@ -1410,9 +1489,30 @@ export default function ProjectDashboard() {
                                   </button>
                                   {!readOnly && (
                                     <>
-                                      <button onClick={() => toggleIssueStatus(issue)} className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors whitespace-nowrap">
-                                        ✓ Resolve
-                                      </button>
+                                      <div className="relative">
+                                        <div className="flex">
+                                          <button onClick={() => toggleIssueStatus(issue)}
+                                            className="text-[10px] px-2.5 py-1.5 rounded-l-lg bg-emerald-500/10 border border-emerald-500/25 border-r-0 text-emerald-400 hover:bg-emerald-500/20 transition-colors whitespace-nowrap">
+                                            ✓ Resolve
+                                          </button>
+                                          <button onClick={() => setResolveMenuIssue(resolveMenuIssue === issue.id ? null : issue.id)}
+                                            className="text-[10px] px-1.5 py-1.5 rounded-r-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors">
+                                            <ChevronDown size={10} />
+                                          </button>
+                                        </div>
+                                        {resolveMenuIssue === issue.id && (
+                                          <div className="absolute right-0 top-full mt-1 z-20 flex flex-col min-w-[160px] rounded-xl border border-amber-500/30 bg-slate-950/98 shadow-xl overflow-hidden">
+                                            <button onClick={() => { toggleIssueStatus(issue); setResolveMenuIssue(null); }}
+                                              className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-emerald-400 hover:bg-emerald-400/10 transition-colors">
+                                              <CheckCircle2 size={12} /> Mark Resolved
+                                            </button>
+                                            <button onClick={() => { markIssueForDeployment(issue); setResolveMenuIssue(null); }}
+                                              className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-amber-400 hover:bg-amber-400/10 transition-colors border-t border-slate-800">
+                                              <Rocket size={12} /> For Deployment
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
                                       <button
                                         onClick={async () => {
                                           const patch: Partial<RaisedIssue> = { status: "open", date_started: undefined };
@@ -1501,13 +1601,41 @@ export default function ProjectDashboard() {
                               </button>
                               {!readOnly && (
                                 <>
-                                  <button
-                                    onClick={() => markTaskDone(item.task.title)}
-                                    disabled={actionLoading === item.task.title}
-                                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40 whitespace-nowrap"
-                                  >
-                                    ✓ Done
-                                  </button>
+                                  {/* Done split-button */}
+                                  <div className="relative">
+                                    <div className="flex">
+                                      <button
+                                        onClick={() => markTaskDone(item.task.title)}
+                                        disabled={actionLoading === item.task.title}
+                                        className="text-[10px] px-2.5 py-1.5 rounded-l-lg bg-emerald-500/10 border border-emerald-500/25 border-r-0 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40 whitespace-nowrap"
+                                      >
+                                        ✓ Done
+                                      </button>
+                                      <button
+                                        onClick={() => setDoneMenuTask(doneMenuTask === item.task.title ? null : item.task.title)}
+                                        disabled={actionLoading === item.task.title}
+                                        className="text-[10px] px-1.5 py-1.5 rounded-r-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40"
+                                      >
+                                        <ChevronDown size={10} />
+                                      </button>
+                                    </div>
+                                    {doneMenuTask === item.task.title && (
+                                      <div className="absolute right-0 top-full mt-1 z-20 flex flex-col min-w-[160px] rounded-xl border border-amber-500/30 bg-slate-950/98 shadow-xl shadow-black/50 overflow-hidden">
+                                        <button
+                                          onClick={() => { markTaskDone(item.task.title); setDoneMenuTask(null); }}
+                                          className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-emerald-400 hover:bg-emerald-400/10 transition-colors"
+                                        >
+                                          <CheckCircle2 size={12} /> Mark as Done
+                                        </button>
+                                        <button
+                                          onClick={() => { markForDeployment(item.task.title); setDoneMenuTask(null); }}
+                                          className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-amber-400 hover:bg-amber-400/10 transition-colors border-t border-slate-800"
+                                        >
+                                          <Rocket size={12} /> For Deployment
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
                                   <button
                                     onClick={() => markTaskPlanned(item.task.title)}
                                     disabled={actionLoading === item.task.title}
@@ -1607,7 +1735,7 @@ export default function ProjectDashboard() {
                     {dashProjects.map(p => <option key={p} value={p}>{p}</option>)}
                   </select>
                   <div className="flex rounded-lg border border-slate-800 overflow-hidden text-[10px]">
-                    {([["all","All"],["open","Open"],["in_progress","In Progress"],["resolved","Resolved"]] as const).map(([s, label]) => (
+                    {([["all","All"],["open","Open"],["in_progress","In Progress"],["deployment","Deploy"],["resolved","Resolved"]] as const).map(([s, label]) => (
                       <button key={s} onClick={() => { setDashIssueStatusFilter(s); setDashIssuePage(1); }} className={`px-2.5 py-1 font-medium transition-colors ${dashIssueStatusFilter === s ? "bg-slate-800 text-slate-200" : "text-slate-500 hover:text-slate-300"}`}>{label}</button>
                     ))}
                   </div>
@@ -1628,6 +1756,9 @@ export default function ProjectDashboard() {
                         <option value="feature">Feature</option>
                         <option value="optimized">Optimized</option>
                         <option value="task">Task</option>
+                        <option value="milestone">Milestone</option>
+                        <option value="learning">Learning</option>
+                        <option value="refactor">Refactor</option>
                         <option value="other">Other</option>
                       </select>
                       <select value={issueForm.priority ?? "major"} onChange={e => setIssueForm(f => ({ ...f, priority: e.target.value as RaisedIssue["priority"] }))} className="rounded-lg border border-slate-700 bg-slate-900 text-slate-300 text-xs px-2 py-1.5 outline-none">
@@ -1725,6 +1856,7 @@ export default function ProjectDashboard() {
                           onDelete={deleteIssue}
                           onStart={startIssue}
                           onToggle={toggleIssueStatus}
+                          onDeploy={markIssueForDeployment}
                           focused={isFocused("issue", issue.id)}
                           onFocus={() => toggleFocus("issue", issue.id)}
                         />
@@ -2273,221 +2405,372 @@ export default function ProjectDashboard() {
           })()}
         </div>
 
-        {/* ── Filters ────────────────────────────────────────── */}
-        <section className="flex flex-wrap items-center gap-2 sm:gap-3 mb-8 p-3 sm:p-4 rounded-2xl border border-emerald-900/40 bg-slate-900/60 backdrop-blur-sm animate-fade-in-up [animation-delay:140ms]">
-          <div className="flex items-center gap-2 flex-1 min-w-[180px] basis-full sm:basis-auto">
-            <Search size={16} className="text-emerald-400 shrink-0" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search title, tasks, tags..."
-              className="w-full bg-transparent border-none outline-none text-sm text-slate-100 placeholder:text-slate-500"
-            />
-          </div>
-
-          <FilterSelect
-            icon={Folder}
-            value={project}
-            onChange={setProject}
-            options={[
-              { value: "all", label: "All Projects" },
-              ...projects.map((p) => ({ value: p, label: p })),
-            ]}
-          />
-
-          <FilterSelect
-            icon={LayoutGrid}
-            value={type}
-            onChange={(v) => {
-              setType(v);
-              setStatus("all");
-            }}
-            options={[
-              { value: "all", label: "All Types" },
-              ...Object.entries(TYPE_META).map(([k, v]) => ({
-                value: k,
-                label: v.label,
-              })),
-            ]}
-          />
-
-          <div className="flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-1.5">
-            <CalendarRange size={14} className="text-emerald-400 shrink-0" />
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="bg-transparent border-none outline-none text-xs sm:text-sm text-slate-200 [color-scheme:dark]"
-            />
-            <span className="text-slate-600 text-xs">→</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="bg-transparent border-none outline-none text-xs sm:text-sm text-slate-200 [color-scheme:dark]"
-            />
-          </div>
-
-          {hasFilters && (
-            <button
-              onClick={() => {
-                setProject("all");
-                setType("all");
-                setStatus("all");
-                setSearch("");
-                setDateFrom("");
-                setDateTo("");
-              }}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-emerald-900/60 text-emerald-300 hover:bg-emerald-400/10 transition-colors"
-            >
-              <X size={14} /> Clear
-            </button>
-          )}
-        </section>
-
-        {/* ── Entries grid — one card per day, raised issues merged ─── */}
+        {/* ── Completed Panel ────────────────────────────────── */}
         {(() => {
-          // Raised issues by date (in_progress / resolved only)
-          const visibleIssues = issues.filter(i => i.status !== "open");
-          const issuesByDate = new Map<string, RaisedIssue[]>();
-          for (const issue of visibleIssues) {
-            const key = issue.date_started ?? issue.date_raised;
-            if (!issuesByDate.has(key)) issuesByDate.set(key, []);
-            issuesByDate.get(key)!.push(issue);
-          }
+          const CP_PER_PAGE = 7;
 
-          // Consolidate filtered entries: one card per date (merge tasks)
-          const byDate = new Map<string, Entry[]>();
-          for (const e of filtered) {
-            if (!byDate.has(e.date)) byDate.set(e.date, []);
-            byDate.get(e.date)!.push(e);
-          }
-          const consolidated: Entry[] = Array.from(byDate.entries())
-            .sort(([a], [b]) => b.localeCompare(a))
-            .map(([, dayEntries]) => {
-              if (dayEntries.length === 1) return dayEntries[0];
-              // Merge tasks; prefer "progress"/"done" over "planned" for same title
-              const seen = new Map<string, Task>();
-              for (const t of dayEntries.flatMap(e => e.tasks)) {
-                const existing = seen.get(t.title);
-                if (!existing || t.status === "progress" || (t.status === "done" && existing.status === "planned")) {
-                  seen.set(t.title, t);
-                }
-              }
-              const primary = dayEntries[0];
-              return { ...primary, tasks: Array.from(seen.values()) };
-            });
+          // Date cutoff for the active range
+          const today = new Date().toISOString().slice(0, 10);
+          const weekAgo = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })();
+          const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+          const cutoff = completedDateRange === "week" ? weekAgo
+            : completedDateRange === "month" ? monthStart
+            : completedDateRange === "custom" ? (completedDateFrom || "") : "";
+          const ceiling = completedDateRange === "custom" ? (completedDateTo || today) : today;
+          const RANGE_LABELS: Record<typeof completedDateRange, string> = { week: "This Week", month: "This Month", all: "All Time", custom: "Custom" };
+          const dateLabel = completedDateRange === "week"
+            ? `${formatDate(weekAgo)} – ${formatDate(today)}`
+            : completedDateRange === "month"
+            ? `${new Date().toLocaleString("en-US", { month: "long", year: "numeric" })}`
+            : completedDateRange === "custom" && (completedDateFrom || completedDateTo)
+            ? `${completedDateFrom || "…"} – ${completedDateTo || today}`
+            : "All Time";
 
-          // Orphan issues: date not present in any filtered entry
-          const entryDates = new Set(consolidated.map(e => e.date));
-          const orphanIssues = visibleIssues.filter(i => !entryDates.has(i.date_started ?? i.date_raised));
+          // Date filter
+          let dateTasks = cutoff
+            ? completedItems.filter(i => i.entryDate >= cutoff && i.entryDate <= ceiling)
+            : completedItems;
+          let dateIssues = cutoff
+            ? resolvedIssues.filter(i => { const d = i.date_resolved ?? i.date_raised; return d >= cutoff && d <= ceiling; })
+            : resolvedIssues;
 
-          const ITEMS_PER_PAGE = 9;
-          const totalPages = Math.ceil(consolidated.length / ITEMS_PER_PAGE);
-          const paged = consolidated.slice(
-            (page - 1) * ITEMS_PER_PAGE,
-            page * ITEMS_PER_PAGE,
-          );
+          // Type filter (tasks vs issues)
+          if (completedTypeFilter === "tasks") dateIssues = [];
+          if (completedTypeFilter === "issues") dateTasks = [];
 
-          // Group orphan issues by date — one card per day
-          const orphanByDate = new Map<string, RaisedIssue[]>();
-          for (const issue of orphanIssues) {
-            const key = issue.date_started ?? issue.date_raised;
-            if (!orphanByDate.has(key)) orphanByDate.set(key, []);
-            orphanByDate.get(key)!.push(issue);
-          }
-          const orphanGroups = Array.from(orphanByDate.entries()).sort(([a], [b]) => b.localeCompare(a));
+          // Feature filter — only applies to tasks; hide issues when a specific feature is selected
+          const featureTasks = completedFeatureFilter === "all"
+            ? dateTasks
+            : completedFeatureFilter === "general"
+            ? dateTasks.filter(i => !i.featureId)
+            : dateTasks.filter(i => i.featureId === completedFeatureFilter);
 
-          const orphanGrid = orphanGroups.length > 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 mb-6">
-              {orphanGroups.map(([date, groupIssues], i) => (
-                <GroupedIssueCard
-                  key={date}
-                  date={date}
-                  issues={groupIssues}
-                  readOnly={readOnly}
-                  delay={Math.min(i, 6) * 50}
-                  onView={setDetailIssue}
-                  onResolve={toggleIssueStatus}
-                />
-              ))}
-            </div>
-          ) : null;
+          const visibleIssues = completedFeatureFilter === "all" ? dateIssues : [];
 
-          return loading ? (
-            <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
-              Loading entries…
-            </div>
-          ) : consolidated.length === 0 ? (
-            <>
-              {orphanGrid}
-              <div className="text-center py-16 px-5 rounded-2xl border border-dashed border-emerald-900/40 text-slate-500 text-sm animate-fade-in">
-                No entries yet — hit{" "}
-                <span className="text-emerald-400 font-medium">+ New Entry</span>{" "}
-                to log your first task.
-              </div>
-            </>
-          ) : (
-            <>
-              {orphanGrid}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-                {paged.map((entry, i) => (
-                  <EntryCard
-                    key={entry.id}
-                    entry={entry}
-                    activeType={type}
-                    delay={Math.min(i, 6) * 50}
-                    readOnly={readOnly}
-                    onView={() => setViewingEntry(entry)}
-                    onEdit={() => setEditingEntry(entry)}
-                    onImageClick={setZoomSrc}
-                    onCompareZoom={setCompareZoom}
-                    raisedIssues={(issuesByDate.get(entry.date) ?? []).filter(
-                      (issue) => type === "all" || issue.type === type
-                    )}
-                    onViewIssue={setDetailIssue}
-                    onResolveIssue={toggleIssueStatus}
-                  />
-                ))}
-              </div>
-              {totalPages > 1 && (
-                <div className="flex items-center justify-center gap-3 mt-8">
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                    className="px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400 text-xs hover:border-slate-600 hover:text-slate-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    ← Prev
-                  </button>
-                  <div className="flex items-center gap-1.5">
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map(
-                      (p) => (
-                        <button
-                          key={p}
-                          onClick={() => setPage(p)}
-                          className={`w-7 h-7 rounded-md text-xs transition-colors ${
-                            p === page
-                              ? "bg-emerald-400/15 text-emerald-300 border border-emerald-700/40"
-                              : "text-slate-500 hover:text-slate-300 border border-transparent hover:border-slate-700"
-                          }`}
-                        >
-                          {p}
+          const combined: CPRow[] = [
+            ...featureTasks.map(i => ({ kind: "task" as const, item: i })),
+            ...visibleIssues.map(i => ({ kind: "issue" as const, item: i })),
+          ].sort((a, b) => {
+            const da = a.kind === "task" ? a.item.entryDate : (a.item.date_resolved ?? a.item.date_raised);
+            const db = b.kind === "task" ? b.item.entryDate : (b.item.date_resolved ?? b.item.date_raised);
+            return db.localeCompare(da);
+          });
+
+          const totalPages = Math.ceil(combined.length / CP_PER_PAGE);
+          const paged = combined.slice((completedPage - 1) * CP_PER_PAGE, completedPage * CP_PER_PAGE);
+
+          return (
+            <div className="mb-8">
+              <section className="flex flex-col gap-3 p-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/5">
+                {/* Header row */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                    <span className="text-[11px] font-bold tracking-[0.2em] uppercase text-emerald-400">Completed</span>
+                    <span className="text-[11px] text-slate-600">{combined.length}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Range tabs */}
+                    <div className="flex rounded-lg border border-slate-800 overflow-hidden text-[10px]">
+                      {(["week", "month", "all", "custom"] as const).map((r) => (
+                        <button key={r} onClick={() => { setCompletedDateRange(r); setCompletedPage(1); }}
+                          className={`px-2.5 py-1 font-medium transition-colors ${completedDateRange === r ? "bg-emerald-400/15 text-emerald-300" : "text-slate-500 hover:text-slate-300"}`}>
+                          {RANGE_LABELS[r]}
                         </button>
-                      ),
+                      ))}
+                    </div>
+                    {/* Custom date inputs */}
+                    {completedDateRange === "custom" && (
+                      <div className="flex items-center gap-1.5">
+                        <input type="date" value={completedDateFrom} onChange={e => { setCompletedDateFrom(e.target.value); setCompletedPage(1); }}
+                          className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 outline-none" />
+                        <span className="text-slate-600 text-[10px]">→</span>
+                        <input type="date" value={completedDateTo} onChange={e => { setCompletedDateTo(e.target.value); setCompletedPage(1); }}
+                          className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 outline-none" />
+                      </div>
+                    )}
+                    {/* Generate report button */}
+                    {!readOnly && (
+                      <button
+                        onClick={() => {
+                          const ipRows: CPRow[] = [
+                            ...inProgressItems.map(ip => ({
+                              kind: "task" as const,
+                              item: { ...ip.task, entryId: ip.entryId, entryProject: ip.entryProject, entryDate: ip.entryDate } as CompletedTaskItem,
+                            })),
+                            ...issues.filter(i => i.status === "in_progress").map(i => ({ kind: "issue" as const, item: i })),
+                          ];
+                          setReportItems([...ipRows, ...combined]);
+                          setReportDateLabel(dateLabel);
+                          setReportModalOpen(true);
+                        }}
+                        className="flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors font-medium whitespace-nowrap"
+                      >
+                        <BarChart2 size={11} /> Generate Report
+                      </button>
                     )}
                   </div>
-                  <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
-                    className="px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400 text-xs hover:border-slate-600 hover:text-slate-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    Next →
-                  </button>
                 </div>
-              )}
-            </>
+
+                {/* Filter chips row */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Type filter */}
+                  {(["all", "tasks", "issues"] as const).map(f => (
+                    <button key={f} onClick={() => { setCompletedTypeFilter(f); setCompletedPage(1); }}
+                      className={`text-[10px] px-2.5 py-1 rounded-full border font-medium transition-colors ${completedTypeFilter === f ? "bg-emerald-400/15 border-emerald-400/40 text-emerald-300" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}>
+                      {f === "all" ? "All" : f === "tasks" ? "Tasks" : "Raised Issues"}
+                    </button>
+                  ))}
+                  {/* Feature filter — only when showing tasks */}
+                  {completedTypeFilter !== "issues" && features.length > 0 && (
+                    <>
+                      <span className="text-slate-700 text-[10px] px-1">|</span>
+                      <button onClick={() => { setCompletedFeatureFilter("all"); setCompletedPage(1); }}
+                        className={`text-[10px] px-2.5 py-1 rounded-full border font-medium transition-colors ${completedFeatureFilter === "all" ? "bg-blue-400/15 border-blue-400/40 text-blue-300" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}>
+                        All Features
+                      </button>
+                      <button onClick={() => { setCompletedFeatureFilter("general"); setCompletedPage(1); }}
+                        className={`text-[10px] px-2.5 py-1 rounded-full border font-medium transition-colors ${completedFeatureFilter === "general" ? "bg-blue-400/15 border-blue-400/40 text-blue-300" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}>
+                        General
+                      </button>
+                      {features.map(f => (
+                        <button key={f.id} onClick={() => { setCompletedFeatureFilter(f.id); setCompletedPage(1); }}
+                          className={`flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-full border font-medium transition-colors ${completedFeatureFilter === f.id ? "border-opacity-60 text-white" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}
+                          style={completedFeatureFilter === f.id ? { borderColor: f.color, backgroundColor: f.color + "22", color: f.color } : undefined}>
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: f.color }} />
+                          {f.name}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+
+                {combined.length === 0 ? (
+                  <p className="text-xs text-slate-600 py-2">Nothing completed {completedDateRange === "week" ? "this week" : completedDateRange === "month" ? "this month" : "yet"} matching these filters.</p>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-0.5">
+                      {paged.map((row, i) => {
+                        if (row.kind === "task") {
+                          const item = row.item;
+                          const typeKey = (item.type ?? "task") as keyof typeof TYPE_META;
+                          const tm = TYPE_META[typeKey] ?? TYPE_META.task;
+                          const TIcon = tm.icon;
+                          const feat = features.find(f => f.id === item.featureId);
+                          const isEditing = editingDoneTask?.title === item.title && editingDoneTask?.entryId === item.entryId;
+                          if (isEditing) {
+                            return (
+                              <div key={`t-${i}`} className="flex flex-col gap-2 px-3 py-3 rounded-xl border border-emerald-800/40 bg-emerald-400/5">
+                                <input autoFocus value={doneEditForm.title} onChange={e => setDoneEditForm(f => ({ ...f, title: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === "Enter") saveDoneTaskEdit(); if (e.key === "Escape") setEditingDoneTask(null); }}
+                                  className="w-full bg-transparent text-[13px] text-slate-100 outline-none border-b border-slate-700 py-0.5 placeholder:text-slate-600"
+                                  placeholder="Task title…" />
+                                <input value={doneEditForm.description} onChange={e => setDoneEditForm(f => ({ ...f, description: e.target.value }))}
+                                  className="w-full bg-transparent text-[11px] text-slate-400 outline-none border-b border-slate-800 py-0.5 placeholder:text-slate-700"
+                                  placeholder="Description…" />
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] uppercase tracking-widest text-slate-600 font-bold">Project</span>
+                                  {(["VC+", "VC+ CMS"] as const).map(p => (
+                                    <button key={p} onClick={() => setDoneEditForm(f => ({ ...f, project: p }))}
+                                      className={`text-[9px] px-2.5 py-px rounded-full border font-bold tracking-wide transition-colors ${doneEditForm.project === p ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-300" : "border-slate-700 text-slate-600 hover:text-slate-300 hover:border-slate-600"}`}>
+                                      {p}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {(["feature","bugfix","task","milestone","learning","optimized","refactor"] as Task["type"][]).map(t => (
+                                    <button key={t} onClick={() => setDoneEditForm(f => ({ ...f, type: f.type === t ? "" : t! }))}
+                                      className={`text-[9px] px-2 py-px rounded uppercase font-bold tracking-wide transition-colors ${doneEditForm.type === t ? (TYPE_META[t as keyof typeof TYPE_META]?.text ?? "text-slate-300") + " " + (TYPE_META[t as keyof typeof TYPE_META]?.bg ?? "bg-slate-700") : "text-slate-600 bg-slate-800/60 hover:text-slate-400"}`}>
+                                      {t}
+                                    </button>
+                                  ))}
+                                  <span className="text-slate-700 text-[10px]">|</span>
+                                  {(["urgent","major","minor"] as Task["priority"][]).map(p => (
+                                    <button key={p} onClick={() => setDoneEditForm(f => ({ ...f, priority: f.priority === p ? "" : p! }))}
+                                      className={`text-[9px] px-2 py-px rounded uppercase font-bold tracking-wide transition-colors ${doneEditForm.priority === p ? (PRIORITY_META[p]?.text ?? "text-slate-300") + " " + (PRIORITY_META[p]?.bg ?? "bg-slate-700") : "text-slate-600 bg-slate-800/60 hover:text-slate-400"}`}>
+                                      {p}
+                                    </button>
+                                  ))}
+                                  <span className="text-slate-700 text-[10px]">|</span>
+                                  {(["simple","hard","complex"] as Task["complexity"][]).map(c => (
+                                    <button key={c} onClick={() => setDoneEditForm(f => ({ ...f, complexity: f.complexity === c ? "" : c! }))}
+                                      className={`text-[9px] px-2 py-px rounded uppercase font-bold tracking-wide transition-colors ${doneEditForm.complexity === c ? (COMPLEXITY_META[c]?.text ?? "text-slate-300") + " " + (COMPLEXITY_META[c]?.bg ?? "bg-slate-700") : "text-slate-600 bg-slate-800/60 hover:text-slate-400"}`}>
+                                      {c}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="flex items-center gap-1.5 justify-end">
+                                  <button onClick={() => setEditingDoneTask(null)} className="text-[10px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-500 hover:text-slate-300 transition-colors">Cancel</button>
+                                  <button onClick={saveDoneTaskEdit} disabled={doneEditSaving} className="text-[10px] px-3 py-1 rounded-lg border border-emerald-700/50 bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25 transition-colors disabled:opacity-40">
+                                    {doneEditSaving ? "Saving…" : "Save"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={`t-${i}`} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
+                              <CheckCircle2 size={13} className="text-emerald-400/60 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                                  <span className="text-[9px] text-slate-600 font-medium">{item.entryProject}</span>
+                                  <span className={`flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>
+                                    <TIcon size={8} />{tm.label}
+                                  </span>
+                                  {item.priority && (
+                                    <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${PRIORITY_META[item.priority].text} ${PRIORITY_META[item.priority].bg}`}>
+                                      {PRIORITY_META[item.priority].label}
+                                    </span>
+                                  )}
+                                  {item.complexity && (
+                                    <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${COMPLEXITY_META[item.complexity].text} ${COMPLEXITY_META[item.complexity].bg}`}>
+                                      {COMPLEXITY_META[item.complexity].label}
+                                    </span>
+                                  )}
+                                  {feat && (
+                                    <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide" style={{ color: feat.color, backgroundColor: feat.color + "22" }}>
+                                      {feat.name}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[13px] font-medium text-slate-400 leading-snug line-through decoration-slate-600">{item.title}</p>
+                                <p className="text-[10px] text-slate-600 mt-0.5">{item.dateRange ?? formatDate(item.entryDate)}</p>
+                              </div>
+                              {!readOnly && (
+                                <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={() => { setEditingDoneTask(item); setDoneEditForm({ title: item.title, description: item.description ?? "", type: item.type ?? "", priority: item.priority ?? "", complexity: item.complexity ?? "", project: item.entryProject }); }} disabled={actionLoading === item.title}
+                                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors disabled:opacity-40 whitespace-nowrap">
+                                    ✎ Edit
+                                  </button>
+                                  <button onClick={() => reopenDoneTask(item.title)} disabled={actionLoading === item.title}
+                                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/25 text-yellow-400 hover:bg-yellow-500/20 transition-colors disabled:opacity-40 whitespace-nowrap">
+                                    ↩ Reopen
+                                  </button>
+                                  <button onClick={() => moveDoneToPlanned(item.title)} disabled={actionLoading === item.title}
+                                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors disabled:opacity-40 whitespace-nowrap">
+                                    → Plan
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        const issue = row.item;
+                        const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+                        const pm = PRIORITY_META[issue.priority];
+                        return (
+                          <div key={`iss-${issue.id}`} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
+                            <CheckCircle2 size={13} className="text-violet-400/60 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                                <span className="text-[9px] text-slate-600 font-medium">{issue.project}</span>
+                                <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                                {pm && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                                <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-violet-400 bg-violet-400/10">Issue</span>
+                              </div>
+                              <p className="text-[13px] font-medium text-slate-400 leading-snug line-through decoration-slate-600">{issue.title}</p>
+                              <p className="text-[10px] text-slate-600 mt-0.5">resolved {issue.date_resolved ?? issue.date_raised}</p>
+                            </div>
+                            {!readOnly && (
+                              <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button onClick={() => setDetailIssue(issue)}
+                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap">
+                                  ✎ Edit
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const patch: Partial<RaisedIssue> = { status: "in_progress", date_resolved: undefined };
+                                    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+                                    if (!error) setIssues((prev) => prev.map((i) => i.id === issue.id ? { ...i, ...patch } : i));
+                                  }}
+                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/25 text-yellow-400 hover:bg-yellow-500/20 transition-colors whitespace-nowrap">
+                                  ↩ Reopen
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const patch: Partial<RaisedIssue> = { status: "open", date_resolved: undefined, date_started: undefined };
+                                    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issue.id);
+                                    if (!error) setIssues((prev) => prev.map((i) => i.id === issue.id ? { ...i, ...patch } : i));
+                                  }}
+                                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors whitespace-nowrap">
+                                  → Open
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div className="flex items-center justify-between pt-2 border-t border-emerald-400/10">
+                        <button onClick={() => setCompletedPage((p) => Math.max(1, p - 1))} disabled={completedPage === 1}
+                          className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors">
+                          ← Prev
+                        </button>
+                        <span className="text-[10px] text-slate-600">{completedPage} / {totalPages}</span>
+                        <button onClick={() => setCompletedPage((p) => Math.min(totalPages, p + 1))} disabled={completedPage === totalPages}
+                          className="text-[10px] px-2 py-1 text-slate-500 hover:text-slate-300 disabled:opacity-30 transition-colors">
+                          Next →
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </section>
+            </div>
           );
         })()}
+
+        {/* ── Reports Panel ──────────────────────────────────── */}
+        {savedReports.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-sky-900/40 bg-slate-950/60 overflow-hidden animate-fade-in-up [animation-delay:180ms]">
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-sky-900/30">
+              <BarChart2 size={13} className="text-sky-400" />
+              <span className="text-[11px] font-bold uppercase tracking-widest text-sky-400">Weekly Reports</span>
+              <span className="ml-1 text-[10px] text-slate-600">{savedReports.length}</span>
+            </div>
+            <div className="flex flex-col divide-y divide-slate-900">
+              {savedReports.map((r) => {
+                const ts = new Date(r.created_at);
+                const timeStr = ts.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) + " " + ts.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+                const taskCount = r.items_snapshot.filter(x => x.kind === "task").length;
+                const issueCount = r.items_snapshot.filter(x => x.kind === "issue").length;
+                return (
+                  <div key={r.id} className="flex items-center gap-3 px-5 py-3 hover:bg-slate-900/40 transition-colors group">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-slate-200 truncate">{r.title}</p>
+                      <p className="text-[10px] text-slate-600 mt-0.5">
+                        {r.date_label} &nbsp;·&nbsp; Generated {timeStr}
+                        {(taskCount + issueCount) > 0 && <span className="ml-1.5 text-slate-700">— {taskCount}t / {issueCount}i</span>}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => generatePDFReport(r.items_snapshot, {}, r.date_label, features, r.title)}
+                        className="flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-lg border border-sky-700/40 bg-sky-400/10 text-sky-300 hover:bg-sky-400/20 transition-colors font-medium"
+                      >
+                        <BarChart2 size={10} /> Re-download
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await supabase.from("weekly_reports").delete().eq("id", r.id);
+                          setSavedReports(prev => prev.filter(x => x.id !== r.id));
+                        }}
+                        className="p-1.5 rounded-lg text-slate-700 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
 
         <p className="mt-12 text-center text-[11px] text-slate-500">
           I can do all things though
@@ -2971,18 +3254,31 @@ export default function ProjectDashboard() {
         dateTo={reportDateTo}
         onDateToChange={setReportDateTo}
       />
-      <CompletedPanel
-        open={completedOpen}
-        onClose={() => setCompletedOpen(false)}
-        entries={entries}
-        issues={issues}
-        onEditEntry={(entryId) => {
-          setCompletedOpen(false);
-          const entry = entries.find(e => e.id === entryId);
-          if (entry) setEditingEntry(entry);
+      <AllTasksPanel
+        open={allTasksOpen}
+        onClose={() => setAllTasksOpen(false)}
+        completedItems={completedItems}
+        resolvedIssues={resolvedIssues}
+        features={features}
+        readOnly={readOnly}
+        onReopenTask={reopenDoneTask}
+        onOpenIssue={setDetailIssue}
+        onGenerateReport={(rows, label) => {
+          setReportItems(rows);
+          setReportDateLabel(label);
+          setAllTasksOpen(false);
+          setReportModalOpen(true);
         }}
       />
       <CompletionToast toasts={toasts} onClose={(id) => setToasts(prev => prev.filter(t => t.id !== id))} />
+      <WeeklyReportModal
+        open={reportModalOpen}
+        onClose={() => setReportModalOpen(false)}
+        items={reportItems}
+        features={features}
+        dateLabel={reportDateLabel}
+        onSaved={(r) => setSavedReports(prev => [r, ...prev])}
+      />
       {detailIssue && (
         <IssueDetailModal
           issue={detailIssue}
@@ -4031,41 +4327,8 @@ function StatCard({
   );
 }
 
-// ════════════════════════════════════════════════════════════════════
-// Filter select
-// ════════════════════════════════════════════════════════════════════
-function FilterSelect({
-  icon: Icon,
-  value,
-  onChange,
-  options,
-}: {
-  icon: ComponentType<{ size?: number; className?: string }>;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <div className="flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-1.5">
-      <Icon size={14} className="text-emerald-400 shrink-0" />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="bg-transparent border-none outline-none text-xs sm:text-sm text-slate-200 cursor-pointer pr-1"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value} className="bg-slate-900">
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
 
-// ════════════════════════════════════════════════════════════════════
-// Compare block — a single before/after pair
-// ════════════════════════════════════════════════════════════════════
+
 function CompareBlock({
   pair,
   onImageClick,
@@ -4105,308 +4368,6 @@ function CompareBlock({
 
 // ════════════════════════════════════════════════════════════════════
 // Entry card — task-list style
-// ════════════════════════════════════════════════════════════════════
-function EntryCard({
-  entry,
-  activeType = "all",
-  delay = 0,
-  readOnly = false,
-  onView,
-  onEdit,
-  onImageClick,
-  onCompareZoom,
-  raisedIssues = [],
-  onViewIssue,
-  onResolveIssue,
-}: {
-  entry: Entry;
-  activeType?: string;
-  delay?: number;
-  readOnly?: boolean;
-  onView: () => void;
-  onEdit: () => void;
-  onDelete?: () => void;
-  onImageClick: (src: string) => void;
-  onCompareZoom?: (pair: CompareItem) => void;
-  raisedIssues?: RaisedIssue[];
-  onViewIssue?: (issue: RaisedIssue) => void;
-  onResolveIssue?: (issue: RaisedIssue) => void;
-}) {
-  const visibleTasks =
-    activeType === "all"
-      ? entry.tasks.filter((t) => t.status !== "planned")
-      : entry.tasks.filter((t) => t.status !== "planned" && (t.type ?? "task") === activeType);
-  const displayedTasks = visibleTasks.slice(0, 3);
-  const hiddenCount = visibleTasks.length - displayedTasks.length;
-  const derived = deriveEntryStatus(entry.tasks);
-  const borderAccent = STATUS_BORDER[derived] ?? "border-l-slate-700/60";
-
-  return (
-    <article
-      className={`group flex flex-col rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm overflow-hidden transition-colors hover:border-emerald-800/60 animate-fade-in-up border-l-4 ${borderAccent}`}
-      style={{ animationDelay: `${delay}ms` }}
-    >
-      {/* Card header */}
-      <div className="px-4 pt-4 sm:px-5 sm:pt-5 pb-3 border-b border-slate-800/60">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="flex items-center gap-1.5 text-[10px] sm:text-[11px] tracking-widest uppercase text-slate-400">
-            <Folder size={12} /> {entry.project}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                onClick={onView}
-                className="p-1 rounded text-slate-600 hover:text-blue-400 hover:bg-blue-400/10 transition-colors"
-                title="View"
-              >
-                <Eye size={12} />
-              </button>
-              {!readOnly && (
-                <>
-                  <button
-                    onClick={onEdit}
-                    className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"
-                    title="Edit"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                </>
-              )}
-            </div>
-            <span className="text-[10px] sm:text-[11px] font-mono text-slate-500">
-              {formatDate(entry.date)}
-            </span>
-          </div>
-        </div>
-        <h3 className="font-serif text-base sm:text-lg text-slate-50 leading-snug">
-          {entry.title}
-        </h3>
-      </div>
-
-      {/* Embedded raised issues for this date — shown at top before tasks */}
-      {raisedIssues.length > 0 && (
-        <div className="border-b border-red-900/20 px-4 sm:px-5 pt-3 pb-3 flex flex-col gap-2.5">
-          <p className="text-[9px] font-bold uppercase tracking-widest text-red-400/60">Raised Issues</p>
-          {raisedIssues.map(issue => {
-            const resolved = issue.status === "resolved";
-            const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
-            const pm = PRIORITY_META[issue.priority];
-            return (
-              <div key={issue.id} className={`flex items-start gap-2.5 pl-2.5 border-l-2 ${resolved ? "border-emerald-500/40" : "border-red-500/50"}`}>
-                <div className="flex-1 min-w-0">
-                  <button onClick={() => onViewIssue?.(issue)} className="text-xs text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors">
-                    {issue.title}
-                  </button>
-                  {issue.description && (
-                    <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>
-                  )}
-                  <div className="flex flex-wrap items-center gap-1 mt-1">
-                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
-                    {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
-                    {resolved
-                      ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-emerald-400 bg-emerald-400/10">Resolved</span>
-                      : <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>
-                    }
-                  </div>
-                  {/* Media thumbnails */}
-                  {issue.media && issue.media.length > 0 && (
-                    <div className={`grid gap-1.5 mt-2 ${issue.media.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
-                      {issue.media.map((m, mi) => (
-                        <figure key={mi} className="m-0">
-                          <img
-                            src={m.src}
-                            alt={m.caption ?? issue.title}
-                            onClick={() => onImageClick(m.src)}
-                            className="w-full h-24 object-cover rounded-lg border border-slate-800 cursor-zoom-in hover:opacity-90 transition-opacity"
-                          />
-                          {m.caption && (
-                            <figcaption className="text-[10px] text-slate-500 mt-0.5 truncate">{m.caption}</figcaption>
-                          )}
-                        </figure>
-                      ))}
-                    </div>
-                  )}
-                  {/* Compare pairs */}
-                  {issue.compare && issue.compare.length > 0 && (
-                    <div className="mt-2 flex flex-col gap-2">
-                      {issue.compare.map((pair, ci) => (
-                        <CompareBlock key={ci} pair={pair} onImageClick={onImageClick} onCompareZoom={onCompareZoom} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {!readOnly && (
-                  <button
-                    onClick={() => onResolveIssue?.(issue)}
-                    className={`text-[10px] px-2 py-1 rounded-lg border transition-colors shrink-0 ${
-                      resolved
-                        ? "border-slate-700 text-slate-500 hover:text-yellow-400 hover:border-yellow-700/40"
-                        : "border-emerald-700/40 text-emerald-300 hover:bg-emerald-400/10"
-                    }`}
-                  >
-                    {resolved ? "Reopen" : "✓ Resolve"}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Task list */}
-      <ul className="px-4 sm:px-5 py-3 flex flex-col gap-3">
-        {displayedTasks.map((task, i) => {
-          const typeKey = (task.type ?? "task") as keyof typeof TYPE_META;
-          const meta = TYPE_META[typeKey] ?? TYPE_META.task;
-          const Icon = meta.icon;
-          const dot = TASK_STATUS_DOT[task.status] ?? "bg-slate-600";
-
-          return (
-            <li key={i} className="flex flex-col gap-2 ">
-              {/* Task row */}
-              <div className="flex items-start gap-1.5 ">
-                <span
-                  className={`mt-1.25 w-1.5 h-1.5 rounded-full shrink-0 ${dot}`}
-                />
-                <div className="flex-1 flex flex-col gap-1 min-w-0">
-                  <span className="text-xs sm:text-sm text-slate-300 leading-snug">
-                    {task.title}
-                  </span>
-                  {task.description && (
-                    <p className="text-[11px] text-slate-500 leading-relaxed mt-0.5">
-                      {task.description}
-                    </p>
-                  )}
-                  {(task.priority ||
-                    task.complexity ||
-                    task.dateRange ||
-                    (task.tags && task.tags.length > 0)) && (
-                    <div className="flex flex-wrap items-center gap-1">
-                      {task.priority && (
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${PRIORITY_META[task.priority].text} ${PRIORITY_META[task.priority].bg}`}
-                        >
-                          {PRIORITY_META[task.priority].label}
-                        </span>
-                      )}
-                      {task.complexity && (
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[task.complexity].text} ${COMPLEXITY_META[task.complexity].bg}`}
-                        >
-                          {COMPLEXITY_META[task.complexity].label}
-                        </span>
-                      )}
-                      {task.dateRange && (
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          {task.dateRange}
-                        </span>
-                      )}
-                      {task.tags?.map((tag) => {
-                        const s = TASK_TAG_STYLE[tag];
-                        return (
-                          <span
-                            key={tag}
-                            className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full border ${s ? `${s.text} ${s.bg} ${s.border}` : "text-slate-400 bg-slate-800 border-slate-700"}`}
-                          >
-                            #{tag}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-                <span className={`mt-0.5 shrink-0 ${meta.text}`}>
-                  <Icon size={12} />
-                </span>
-              </div>
-
-              {/* Compare pairs under this task */}
-              {task.compare && task.compare.length > 0 && (
-                <div className="ml-5 flex flex-col gap-2">
-                  {task.compare.map((pair, j) => (
-                    <CompareBlock
-                      key={j}
-                      pair={pair}
-                      onImageClick={onImageClick}
-                      onCompareZoom={onCompareZoom}
-                    />
-                  ))}
-                </div>
-              )}
-            </li>
-          );
-        })}
-        {hiddenCount > 0 && (
-          <li className="flex items-center gap-1.5 text-[11px] text-slate-500 pt-1 border-t border-slate-800/50 mt-1">
-            <Eye size={11} />
-            <span>
-              +{hiddenCount} more task{hiddenCount > 1 ? "s" : ""} — click eye
-              icon to view all
-            </span>
-          </li>
-        )}
-      </ul>
-
-      {/* Tags */}
-      {entry.tags && entry.tags.length > 0 && (
-        <div className="px-4 sm:px-5 pb-3 flex flex-wrap gap-1.5">
-          {entry.tags.map((t) => (
-            <span
-              key={t}
-              className="text-[10px] text-slate-500 border border-slate-800 rounded-md px-1.5 py-0.5"
-            >
-              #{t}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Card-level media */}
-      {entry.media && entry.media.length > 0 && (
-        <div
-          className={`px-4 sm:px-5 pb-4 grid gap-2 ${
-            entry.media.length > 1 ? "grid-cols-2" : "grid-cols-1"
-          }`}
-        >
-          {entry.media.map((m, i) => (
-            <figure key={i} className="m-0">
-              {m.kind === "video" ? (
-                <video
-                  controls
-                  className="w-full h-28 sm:h-32 object-cover rounded-lg border border-slate-800 bg-slate-950"
-                >
-                  <source src={m.src} />
-                </video>
-              ) : (
-                <img
-                  src={m.src}
-                  alt={m.caption || entry.title}
-                  onClick={() => onImageClick(m.src)}
-                  className="w-full h-28 sm:h-32 object-cover rounded-lg border border-slate-800 cursor-zoom-in"
-                />
-              )}
-              {m.caption && (
-                <figcaption className="flex items-center gap-1 text-[10px] text-slate-500 mt-1">
-                  {m.kind === "video" ? (
-                    <VideoIcon size={10} />
-                  ) : (
-                    <ImageIcon size={10} />
-                  )}
-                  {m.caption}
-                </figcaption>
-              )}
-            </figure>
-          ))}
-        </div>
-      )}
-
-    </article>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════
-// View Entry Modal — focused single-entry overlay
 // ════════════════════════════════════════════════════════════════════
 function ViewEntryModal({
   entry,
@@ -4624,6 +4585,9 @@ const ISSUE_TYPE_META: Record<string, { label: string; text: string; bg: string 
   feature:   { label: "Feature",   text: "text-emerald-400", bg: "bg-emerald-400/12" },
   optimized: { label: "Optimized", text: "text-cyan-400",    bg: "bg-cyan-400/10" },
   task:      { label: "Task",      text: "text-teal-300",    bg: "bg-teal-300/10" },
+  milestone: { label: "Milestone", text: "text-amber-400",   bg: "bg-amber-400/10" },
+  learning:  { label: "Learning",  text: "text-indigo-400",  bg: "bg-indigo-400/10" },
+  refactor:  { label: "Refactor",  text: "text-fuchsia-400", bg: "bg-fuchsia-400/10" },
   other:     { label: "Other",     text: "text-slate-400",   bg: "bg-slate-800" },
 };
 
@@ -5030,33 +4994,32 @@ function IssueDetailModal({
   );
 }
 
-function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle, focused, onFocus }: {
+function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle, onDeploy, focused, onFocus }: {
   issue: RaisedIssue;
   readOnly: boolean;
   onEdit: (i: RaisedIssue) => void;
   onDelete: (i: RaisedIssue) => void;
   onStart: (i: RaisedIssue) => void;
   onToggle: (i: RaisedIssue) => void;
+  onDeploy?: (i: RaisedIssue) => void;
   focused?: boolean;
   onFocus?: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const typeMeta = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
   const priorityMeta = PRIORITY_META[issue.priority];
   const resolved = issue.status === "resolved";
   const inProgress = issue.status === "in_progress";
+  const forDeployment = issue.status === "deployment";
   return (
-    <div className={`rounded-xl border px-4 py-3 flex flex-col gap-2 transition-colors ${focused ? "border-cyan-500/40 bg-cyan-500/8" : resolved ? "border-slate-800/40 bg-slate-950/20 opacity-60" : inProgress ? "border-yellow-400/20 bg-yellow-400/5" : "border-slate-800 bg-slate-900/60"}`}>
+    <div className={`rounded-xl border px-4 py-3 flex flex-col gap-2 transition-colors ${focused ? "border-cyan-500/40 bg-cyan-500/8" : resolved ? "border-slate-800/40 bg-slate-950/20 opacity-60" : forDeployment ? "border-amber-400/30 bg-amber-400/5" : inProgress ? "border-yellow-400/20 bg-yellow-400/5" : "border-slate-800 bg-slate-900/60"}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium leading-snug ${resolved ? "line-through text-slate-500" : "text-slate-100"}`}>{issue.title}</p>
           {issue.description && <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            onClick={onFocus}
-            className={`p-1 rounded transition-colors ${focused ? "text-cyan-400 bg-cyan-500/15" : "text-slate-600 hover:text-cyan-400/70"}`}
-            title={focused ? "Remove focus" : "Focus this issue"}
-          >
+          <button onClick={onFocus} className={`p-1 rounded transition-colors ${focused ? "text-cyan-400 bg-cyan-500/15" : "text-slate-600 hover:text-cyan-400/70"}`} title={focused ? "Remove focus" : "Focus this issue"}>
             <Crosshair size={12} />
           </button>
           {!readOnly && (
@@ -5066,9 +5029,33 @@ function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle, focuse
                   ▶ Start
                 </button>
               )}
-              {!inProgress && (
-                <button onClick={() => onToggle(issue)} title={resolved ? "Reopen" : "Mark resolved"} className={`text-[10px] px-2 py-1 rounded-lg border transition-colors ${resolved ? "border-slate-700 text-slate-500 hover:text-emerald-400 hover:border-emerald-700/40" : "border-emerald-700/40 text-emerald-400 hover:bg-emerald-400/10"}`}>
-                  {resolved ? "Reopen" : "✓ Resolve"}
+              {inProgress && (
+                <div className="relative">
+                  <div className="flex">
+                    <button onClick={() => onToggle(issue)} className="text-[10px] px-2 py-1 rounded-l-lg border border-emerald-700/40 border-r-0 text-emerald-400 hover:bg-emerald-400/10 transition-colors whitespace-nowrap">
+                      ✓ Resolve
+                    </button>
+                    <button onClick={() => setMenuOpen(o => !o)} className="text-[10px] px-1.5 py-1 rounded-r-lg border border-emerald-700/40 text-emerald-400 hover:bg-emerald-400/10 transition-colors">
+                      <ChevronDown size={10} />
+                    </button>
+                  </div>
+                  {menuOpen && (
+                    <div className="absolute right-0 top-full mt-1 z-20 flex flex-col min-w-[160px] rounded-xl border border-amber-500/30 bg-slate-950/98 shadow-xl overflow-hidden">
+                      <button onClick={() => { onToggle(issue); setMenuOpen(false); }} className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-emerald-400 hover:bg-emerald-400/10 transition-colors">
+                        <CheckCircle2 size={12} /> Mark Resolved
+                      </button>
+                      {onDeploy && (
+                        <button onClick={() => { onDeploy(issue); setMenuOpen(false); }} className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-amber-400 hover:bg-amber-400/10 transition-colors border-t border-slate-800">
+                          <Rocket size={12} /> For Deployment
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {resolved && (
+                <button onClick={() => onToggle(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 text-slate-500 hover:text-emerald-400 hover:border-emerald-700/40 transition-colors">
+                  Reopen
                 </button>
               )}
               <button onClick={() => onEdit(issue)} className="p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-colors"><Pencil size={12} /></button>
@@ -5081,6 +5068,7 @@ function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle, focuse
         <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${typeMeta.text} ${typeMeta.bg}`}>{typeMeta.label}</span>
         {priorityMeta && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${priorityMeta.text} ${priorityMeta.bg}`}>{priorityMeta.label}</span>}
         {inProgress && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>}
+        {forDeployment && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-amber-400 bg-amber-400/10">For Deployment</span>}
         <span className="text-[9px] text-slate-600 font-mono ml-auto">{issue.date_raised}</span>
         {inProgress && issue.date_started && <span className="text-[9px] text-yellow-600 font-mono">started {issue.date_started}</span>}
         {resolved && issue.date_resolved && <span className="text-[9px] text-emerald-600 font-mono">resolved {issue.date_resolved}</span>}
@@ -5091,388 +5079,6 @@ function IssueRow({ issue, readOnly, onEdit, onDelete, onStart, onToggle, focuse
 
 // ════════════════════════════════════════════════════════════════════
 // Grouped Issue Card — raised issues for the same date, one card
-// ════════════════════════════════════════════════════════════════════
-function GroupedIssueCard({
-  date, issues, readOnly, delay, onView, onResolve,
-}: {
-  date: string;
-  issues: RaisedIssue[];
-  readOnly: boolean;
-  delay?: number;
-  onView: (issue: RaisedIssue) => void;
-  onResolve: (issue: RaisedIssue) => void;
-}) {
-  const allResolved = issues.every(i => i.status === "resolved");
-  const borderAccent = allResolved ? "border-l-emerald-500/60" : "border-l-red-500/60";
-  return (
-    <article
-      className={`flex flex-col rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-sm overflow-hidden animate-fade-in-up border-l-4 ${borderAccent}`}
-      style={{ animationDelay: `${delay ?? 0}ms` }}
-    >
-      <div className="px-4 pt-4 sm:px-5 sm:pt-5 pb-3 border-b border-slate-800/60 flex items-center justify-between">
-        <span className="flex items-center gap-1.5 text-[10px] tracking-widest uppercase text-slate-400">
-          <Folder size={12} /> {issues[0].project}
-        </span>
-        <span className="text-[10px] font-mono text-slate-500">{date}</span>
-      </div>
-      <div className="px-4 sm:px-5 pt-3 pb-3 flex flex-col gap-3">
-        <p className="text-[9px] font-bold uppercase tracking-widest text-red-400/60">Raised Issues</p>
-        {issues.map(issue => {
-          const resolved = issue.status === "resolved";
-          const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
-          const pm = PRIORITY_META[issue.priority];
-          const hasMedia = (issue.media?.length ?? 0) + (issue.compare?.length ?? 0) > 0;
-          return (
-            <div key={issue.id} className={`flex items-start gap-2.5 pl-2.5 border-l-2 ${resolved ? "border-emerald-500/40" : "border-red-500/50"}`}>
-              <div className="flex-1 min-w-0">
-                <button onClick={() => onView(issue)} className="text-xs text-slate-200 leading-snug text-left hover:text-emerald-300 transition-colors">
-                  {issue.title}
-                </button>
-                {issue.description && (
-                  <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>
-                )}
-                <div className="flex flex-wrap items-center gap-1 mt-1">
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-red-300 bg-red-400/10">Raised Issue</span>
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
-                  {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
-                  {resolved
-                    ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-emerald-400 bg-emerald-400/10">Resolved</span>
-                    : <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide text-yellow-400 bg-yellow-400/10">In Progress</span>
-                  }
-                  {hasMedia && <span className="text-[9px] text-slate-500 flex items-center gap-0.5"><ImageIcon size={9} /> media</span>}
-                </div>
-              </div>
-              {!readOnly && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={() => onView(issue)} className="text-[10px] px-2 py-1 rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 transition-colors">
-                    + Media
-                  </button>
-                  <button
-                    onClick={() => onResolve(issue)}
-                    className={`text-[10px] px-2 py-1 rounded-lg border transition-colors ${
-                      resolved
-                        ? "border-slate-700 text-slate-500 hover:text-yellow-400 hover:border-yellow-700/40"
-                        : "border-emerald-700/40 text-emerald-300 hover:bg-emerald-400/10"
-                    }`}
-                  >
-                    {resolved ? "Reopen" : "✓ Resolve"}
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </article>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════
-// COMPLETED PANEL
-// ════════════════════════════════════════════════════════════════════
-type DoneTask = Task & { date: string; project: string; entryTitle: string; entryId: string };
-
-function CompletedPanel({
-  open, onClose, entries, issues, onEditEntry,
-}: {
-  open: boolean;
-  onClose: () => void;
-  entries: Entry[];
-  issues: RaisedIssue[];
-  onEditEntry?: (entryId: string) => void;
-}) {
-  const [dateRange, setDateRange] = useState<"week" | "month" | "all" | "custom">("week");
-  const [customFrom, setCustomFrom] = useState("");
-  const [customTo, setCustomTo] = useState("");
-  const [projectFilter, setProjectFilter] = useState("all");
-  const [typeFilter, setTypeFilter] = useState("all");
-
-  useEffect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
-
-  const projects = useMemo(() => Array.from(new Set(entries.map(e => e.project))), [entries]);
-
-  const { from, to } = useMemo(() => {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    if (dateRange === "week") {
-      const d = new Date(now); d.setDate(d.getDate() - 6);
-      return { from: d.toISOString().slice(0, 10), to: today };
-    }
-    if (dateRange === "month") {
-      return { from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10), to: today };
-    }
-    if (dateRange === "custom") return { from: customFrom, to: customTo };
-    return { from: "", to: "" };
-  }, [dateRange, customFrom, customTo]);
-
-  const allDoneTasks = useMemo<DoneTask[]>(() => {
-    const all = entries.flatMap(e =>
-      e.tasks.filter(t => t.status === "done").map(t => ({ ...t, date: e.date, project: e.project, entryTitle: e.title, entryId: e.id }))
-    ).sort((a, b) => b.date.localeCompare(a.date));
-    const seen = new Map<string, DoneTask>();
-    for (const t of all) {
-      if (!seen.has(t.title)) seen.set(t.title, t);
-    }
-    return Array.from(seen.values());
-  }, [entries]);
-
-  const resolvedIssues = useMemo(() => [...issues.filter(i => i.status === "resolved")].sort((a, b) => (b.date_resolved ?? b.date_raised).localeCompare(a.date_resolved ?? a.date_raised)), [issues]);
-
-  const filteredDone = useMemo(() => allDoneTasks.filter(t => {
-    if (projectFilter !== "all" && t.project !== projectFilter) return false;
-    if (typeFilter !== "all" && typeFilter !== "issues" && (t.type ?? "task") !== typeFilter) return false;
-    if (typeFilter === "issues") return false;
-    if (from && t.date < from) return false;
-    if (to && t.date > to) return false;
-    return true;
-  }), [allDoneTasks, projectFilter, typeFilter, from, to]);
-
-  const filteredResolved = useMemo(() => resolvedIssues.filter(i => {
-    if (projectFilter !== "all" && i.project !== projectFilter) return false;
-    if (typeFilter !== "all" && typeFilter !== "issues" && i.type !== typeFilter) return false;
-    const d = i.date_resolved ?? i.date_raised;
-    if (from && d < from) return false;
-    if (to && d > to) return false;
-    return true;
-  }), [resolvedIssues, projectFilter, typeFilter, from, to]);
-
-  const motivation = useMemo(() => {
-    const total = filteredDone.length + filteredResolved.length;
-    const bugs = filteredDone.filter(t => t.type === "bugfix").length + filteredResolved.length;
-    const features = filteredDone.filter(t => t.type === "feature").length;
-    const optimized = filteredDone.filter(t => t.type === "optimized").length;
-    const period = dateRange === "week" ? "this week" : dateRange === "month" ? "this month" : "in total";
-
-    if (total === 0) return { emoji: "💭", headline: "Nothing here yet...", sub: "No completed work in this range. Time to ship something great!", color: "from-slate-800/60 to-slate-900/60 border-slate-700/40" };
-    if (bugs > 20) return { emoji: "🔥", headline: "Absolute bug terminator!", sub: `You crushed ${bugs} bugs ${period}. The codebase has never been cleaner.`, color: "from-orange-900/40 to-red-900/30 border-orange-700/30" };
-    if (features > 15) return { emoji: "🚀", headline: "Feature factory mode!", sub: `${features} features shipped ${period}. Users are going to love every single one.`, color: "from-emerald-900/40 to-teal-900/30 border-emerald-700/30" };
-    if (total > 30) return { emoji: "⚡", headline: "Absolutely legendary!", sub: `${total} tasks completed ${period}. You're operating on another level.`, color: "from-yellow-900/30 to-amber-900/20 border-yellow-700/30" };
-    if (optimized > 8) return { emoji: "🎯", headline: "Performance wizard!", sub: `${optimized} optimizations ${period}. The app is running like a dream.`, color: "from-cyan-900/40 to-blue-900/30 border-cyan-700/30" };
-    if (filteredResolved.length > 8) return { emoji: "🛡️", headline: "Issue slayer!", sub: `${filteredResolved.length} raised issues resolved ${period}. Rock-solid reliability.`, color: "from-violet-900/40 to-purple-900/30 border-violet-700/30" };
-    if (total > 20) return { emoji: "💪", headline: "Crushing it!", sub: `${total} tasks done ${period}. That's serious momentum — keep it going.`, color: "from-emerald-900/30 to-teal-900/20 border-emerald-700/30" };
-    if (features > 5) return { emoji: "✨", headline: "Shipping great things!", sub: `${features} features out the door ${period}. Quality work, every time.`, color: "from-emerald-900/30 to-slate-900/20 border-emerald-700/30" };
-    if (bugs > 5) return { emoji: "🐛", headline: "Bug hunter on the loose!", sub: `${bugs} bugs squashed ${period}. Each fix makes the product better.`, color: "from-orange-900/30 to-slate-900/20 border-orange-700/30" };
-    if (total > 10) return { emoji: "📈", headline: "On a great roll!", sub: `${total} tasks wrapped up ${period}. Steady progress wins the race.`, color: "from-blue-900/30 to-slate-900/20 border-blue-700/30" };
-    if (total > 5) return { emoji: "✅", headline: "Solid progress!", sub: `${total} tasks done ${period}. Every task shipped is a step forward.`, color: "from-teal-900/30 to-slate-900/20 border-teal-700/30" };
-    return { emoji: "🌱", headline: "Getting things done!", sub: `${total} task${total > 1 ? "s" : ""} completed ${period}. Great start — keep building!`, color: "from-slate-800/60 to-slate-900/40 border-slate-700/40" };
-  }, [filteredDone, filteredResolved, dateRange]);
-
-  const TYPE_FILTERS = [
-    { key: "all", label: "All" },
-    { key: "feature", label: "Features" },
-    { key: "bugfix", label: "Bug Fixes" },
-    { key: "task", label: "Tasks" },
-    { key: "optimized", label: "Optimized" },
-    { key: "refactor", label: "Refactors" },
-    { key: "milestone", label: "Milestones" },
-    { key: "issues", label: "Raised Issues" },
-  ];
-
-  const RANGE_BTNS = [
-    { key: "week", label: "This Week" },
-    { key: "month", label: "This Month" },
-    { key: "all", label: "All Time" },
-    { key: "custom", label: "Custom" },
-  ] as const;
-
-  if (!open) return null;
-
-  const totalFiltered = filteredDone.length + filteredResolved.length;
-  const bugCount = filteredDone.filter(t => t.type === "bugfix").length + filteredResolved.length;
-  const featureCount = filteredDone.filter(t => t.type === "feature").length;
-  const showTasks = typeFilter !== "issues";
-  const showIssues = typeFilter === "all" || typeFilter === "issues";
-
-  return (
-    <>
-      <div onClick={onClose} className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" />
-      <div className="fixed inset-0 z-55 flex flex-col bg-slate-950 overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 sm:px-8 py-4 border-b border-slate-800 shrink-0">
-          <div className="flex items-center gap-3">
-            <CheckCircle2 size={18} className="text-emerald-400" />
-            <div>
-              <h2 className="text-sm font-bold tracking-widest uppercase text-emerald-300">Completed Work</h2>
-              <p className="text-[11px] text-slate-500 mt-0.5">{totalFiltered} item{totalFiltered !== 1 ? "s" : ""} in this view</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 sm:px-8 py-6 flex flex-col gap-6">
-          {/* Motivational card */}
-          <div className={`rounded-2xl border bg-gradient-to-br ${motivation.color} px-5 py-4 flex items-start gap-4`}>
-            <span className="text-3xl mt-0.5 shrink-0">{motivation.emoji}</span>
-            <div>
-              <p className="text-base font-bold text-slate-100 leading-snug">{motivation.headline}</p>
-              <p className="text-sm text-slate-400 mt-1 leading-relaxed">{motivation.sub}</p>
-            </div>
-            <Sparkles size={16} className="ml-auto shrink-0 text-slate-600 mt-1" />
-          </div>
-
-          {/* Stats row */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Total Done", value: totalFiltered, color: "text-emerald-400", bg: "border-emerald-700/30 bg-emerald-400/5" },
-              { label: "Resolved Issues", value: filteredResolved.length, color: "text-violet-400", bg: "border-violet-700/30 bg-violet-400/5" },
-              { label: "Bug Fixes", value: bugCount, color: "text-orange-400", bg: "border-orange-700/30 bg-orange-400/5" },
-              { label: "Features", value: featureCount, color: "text-teal-400", bg: "border-teal-700/30 bg-teal-400/5" },
-            ].map(s => (
-              <div key={s.label} className={`rounded-xl border ${s.bg} px-4 py-3 flex flex-col gap-1`}>
-                <span className={`text-2xl font-bold font-mono ${s.color}`}>{s.value}</span>
-                <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">{s.label}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Filters */}
-          <div className="flex flex-col gap-3">
-            {/* Quick range chips */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <Filter size={12} className="text-slate-600 shrink-0" />
-              {RANGE_BTNS.map(r => (
-                <button
-                  key={r.key}
-                  onClick={() => setDateRange(r.key)}
-                  className={`text-[11px] px-3 py-1.5 rounded-lg border font-medium transition-colors ${dateRange === r.key ? "bg-emerald-400/15 border-emerald-700/40 text-emerald-300" : "border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600"}`}
-                >
-                  {r.label}
-                </button>
-              ))}
-              {dateRange === "custom" && (
-                <div className="flex items-center gap-2 ml-1">
-                  <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
-                    className="text-[11px] bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-300 focus:outline-none focus:border-emerald-700" />
-                  <span className="text-slate-600 text-xs">→</span>
-                  <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
-                    className="text-[11px] bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-300 focus:outline-none focus:border-emerald-700" />
-                </div>
-              )}
-            </div>
-            {/* Project + Type filters */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <select value={projectFilter} onChange={e => setProjectFilter(e.target.value)}
-                className="text-[11px] bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-300 focus:outline-none focus:border-emerald-700">
-                <option value="all">All Projects</option>
-                {projects.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {TYPE_FILTERS.map(f => (
-                  <button
-                    key={f.key}
-                    onClick={() => setTypeFilter(f.key)}
-                    className={`text-[11px] px-2.5 py-1 rounded-lg border font-medium transition-colors ${typeFilter === f.key ? "bg-slate-700 border-slate-500 text-slate-100" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Completed Tasks */}
-          {showTasks && filteredDone.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
-                <CheckCircle2 size={11} className="text-emerald-500" /> Completed Tasks
-                <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold">{filteredDone.length}</span>
-              </p>
-              <div className="flex flex-col gap-1.5">
-                {filteredDone.map((task, i) => {
-                  const typeKey = (task.type ?? "task") as keyof typeof TYPE_META;
-                  const meta = TYPE_META[typeKey] ?? TYPE_META.task;
-                  const Icon = meta.icon;
-                  const pm = task.priority ? PRIORITY_META[task.priority] : null;
-                  return (
-                    <div key={i} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 transition-colors group">
-                      <span className={`mt-0.5 shrink-0 ${meta.text}`}><Icon size={13} /></span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-slate-200 leading-snug">{task.title}</p>
-                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                          <span className="text-[10px] font-mono text-slate-600">{task.dateRange ?? task.date}</span>
-                          <span className="text-slate-700">·</span>
-                          <span className="text-[10px] text-slate-500">{task.project}</span>
-                          {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
-                          {task.complexity && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${COMPLEXITY_META[task.complexity].text} ${COMPLEXITY_META[task.complexity].bg}`}>{COMPLEXITY_META[task.complexity].label}</span>}
-                          {task.tags?.map(tag => <span key={tag} className="text-[9px] text-slate-500 border border-slate-800 rounded-md px-1.5 py-0.5">#{tag}</span>)}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${meta.text} ${meta.bg}`}>{meta.label}</span>
-                        {onEditEntry && (
-                          <button
-                            onClick={() => onEditEntry(task.entryId)}
-                            className="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-600 hover:text-emerald-400 hover:bg-emerald-400/10 transition-all"
-                            title="Edit entry"
-                          >
-                            <Pencil size={12} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Resolved Raised Issues */}
-          {showIssues && filteredResolved.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
-                <AlertCircle size={11} className="text-violet-400" /> Resolved Issues
-                <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-bold">{filteredResolved.length}</span>
-              </p>
-              <div className="flex flex-col gap-1.5">
-                {filteredResolved.map(issue => {
-                  const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
-                  const pm = PRIORITY_META[issue.priority];
-                  const days = issue.date_started && issue.date_resolved
-                    ? Math.max(0, Math.round((new Date(issue.date_resolved).getTime() - new Date(issue.date_started).getTime()) / 86400000))
-                    : null;
-                  return (
-                    <div key={issue.id} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-slate-900/60 border border-emerald-900/20 hover:border-emerald-800/40 transition-colors">
-                      <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-emerald-500" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-slate-200 leading-snug">{issue.title}</p>
-                        {issue.description && <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{issue.description}</p>}
-                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                          <span className="text-[10px] font-mono text-slate-600">{issue.date_resolved ?? issue.date_raised}</span>
-                          <span className="text-slate-700">·</span>
-                          <span className="text-[10px] text-slate-500">{issue.project}</span>
-                          {days !== null && <span className="text-[10px] text-slate-600">resolved in {days}d</span>}
-                          {pm && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
-                        </div>
-                      </div>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0 ${tm.text} ${tm.bg}`}>{tm.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Empty state */}
-          {totalFiltered === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-center gap-3">
-              <TrendingUp size={32} className="text-slate-700" />
-              <p className="text-slate-400 font-medium">Nothing completed in this range</p>
-              <p className="text-slate-600 text-sm">Try a wider date range or different filters</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════
-// Completion Toast — stacked top-right, magical orb + fire effect
 // ════════════════════════════════════════════════════════════════════
 function CompletionToast({
   toasts,
@@ -5541,5 +5147,856 @@ function CompletionToast({
         </div>
       ))}
     </div>
+  );
+}
+
+function taskDurationStr(dateRange: string | undefined, entryDate: string): string {
+  if (!dateRange || !dateRange.includes("→")) return "Same day";
+  const [fromStr, toStr] = dateRange.split("→").map(s => s.trim());
+  const year = new Date(entryDate + "T00:00:00").getFullYear();
+  const fromD = new Date(`${fromStr} ${year}`);
+  const toD = new Date(`${toStr} ${year}`);
+  if (isNaN(fromD.getTime()) || isNaN(toD.getTime())) return "Same day";
+  const days = Math.round((toD.getTime() - fromD.getTime()) / 86400000);
+  return days <= 0 ? "Same day" : `${days} day${days !== 1 ? "s" : ""}`;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// WEEKLY REPORT MODAL + PDF GENERATOR
+// ════════════════════════════════════════════════════════════════════
+type ReportMediaItem = { file: File | null; preview: string; caption: string };
+type ReportCompareSlot = { file: File | null; preview: string; note: string };
+type ReportCompareItem = { label: string; before: ReportCompareSlot; after: ReportCompareSlot };
+type TaskEnhancement = {
+  open: boolean;
+  media: ReportMediaItem[];
+  compare: ReportCompareItem[];
+};
+
+async function fileOrUrlToSrc(preview: string, file: File | null | undefined): Promise<string> {
+  if (file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }
+  return preview;
+}
+
+async function generatePDFReport(
+  items: CPRow[],
+  enhancements: Record<string, TaskEnhancement>,
+  dateLabel: string,
+  features: Feature[],
+  reportTitle: string,
+) {
+  const TYPE_COLORS: Record<string, string> = {
+    feature:"#10b981",bugfix:"#f97316",task:"#14b8a6",milestone:"#f59e0b",
+    learning:"#6366f1",optimized:"#06b6d4",refactor:"#a855f7",other:"#64748b",
+  };
+  const PRIORITY_COLORS: Record<string, string> = { urgent:"#ef4444", major:"#f59e0b", minor:"#3b82f6" };
+  const COMPLEXITY_COLORS: Record<string, string> = { simple:"#14b8a6", hard:"#f97316", complex:"#a855f7" };
+  const badge = (text: string, color: string) =>
+    `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${color}22;color:${color};margin:1px 2px;text-transform:uppercase;letter-spacing:.05em;border:1px solid ${color}44">${text}</span>`;
+
+  const daysBetween = (from: string, to: string) =>
+    Math.max(0, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000));
+  const today = new Date().toISOString().slice(0, 10);
+
+  const sortedItems = [...items].sort((a, b) => {
+    const da = a.kind === "task" ? a.item.entryDate : (a.item.date_resolved ?? a.item.date_raised);
+    const db = b.kind === "task" ? b.item.entryDate : (b.item.date_resolved ?? b.item.date_raised);
+    return db.localeCompare(da);
+  });
+
+  const taskItems = sortedItems.filter(r => r.kind === "task") as { kind: "task"; item: CompletedTaskItem }[];
+  const issueItems = sortedItems.filter(r => r.kind === "issue") as { kind: "issue"; item: RaisedIssue }[];
+
+  // Build per-item HTML sections
+  const resolveSlot = async (slot: ReportCompareSlot) => ({
+    src: await fileOrUrlToSrc(slot.preview, slot.file),
+    note: slot.note,
+  });
+
+  const itemBlocks = await Promise.all(sortedItems.map(async (row) => {
+    const key = row.kind === "task" ? row.item.title : row.item.id;
+    const enh = enhancements[key];
+
+    const mediaHtml = enh?.media.filter(m => m.preview).length
+      ? `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px">${
+          (await Promise.all(enh.media.filter(m => m.preview).map(async m =>
+            `<div style="page-break-inside:avoid">
+               <img src="${await fileOrUrlToSrc(m.preview, m.file)}" style="width:100%;border-radius:6px;border:1px solid #e5e7eb;object-fit:cover;max-height:200px" />
+               ${m.caption ? `<p style="font-size:11px;color:#6b7280;margin-top:4px;text-align:center;font-style:italic">${m.caption}</p>` : ""}
+             </div>`))).join("")
+        }</div>` : "";
+
+    const compareHtml = enh?.compare.filter(c => c.before.preview || c.after.preview).length
+      ? (await Promise.all(enh.compare.filter(c => c.before.preview || c.after.preview).map(async c => {
+          const b = await resolveSlot(c.before);
+          const a = await resolveSlot(c.after);
+          return `<div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-top:8px;page-break-inside:avoid">
+            ${c.label ? `<p style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">${c.label}</p>` : ""}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div><p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#9ca3af;margin-bottom:4px">Before</p>
+                ${b.src ? `<img src="${b.src}" style="width:100%;border-radius:4px;border:1px solid #e5e7eb;object-fit:cover;max-height:160px" />` : ""}
+                ${b.note ? `<p style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic">${b.note}</p>` : ""}</div>
+              <div><p style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#9ca3af;margin-bottom:4px">After</p>
+                ${a.src ? `<img src="${a.src}" style="width:100%;border-radius:4px;border:1px solid #e5e7eb;object-fit:cover;max-height:160px" />` : ""}
+                ${a.note ? `<p style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic">${a.note}</p>` : ""}</div>
+            </div></div>`;
+        }))).join("") : "";
+
+    if (row.kind === "task") {
+      const item = row.item;
+      const isIP = item.status === "progress";
+      const feat = features.find(f => f.id === item.featureId);
+      const durationStr = isIP
+        ? `${daysBetween(item.entryDate, today)} day${daysBetween(item.entryDate, today) !== 1 ? "s" : ""} so far`
+        : taskDurationStr(item.dateRange, item.entryDate);
+      const typeColor = TYPE_COLORS[item.type ?? "task"] ?? "#64748b";
+      const borderColor = isIP ? "#f59e0b" : "#e5e7eb";
+      const bgColor = isIP ? "#fffbeb" : "transparent";
+      return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:14px;margin:8px 0;page-break-inside:avoid;background:${bgColor}">
+        <div style="margin-bottom:6px">
+          ${isIP ? badge("In Progress","#f59e0b") : ""}
+          ${item.type ? badge(item.type.replace("bugfix","Bug Fix").replace("optimized","Optimized"), typeColor) : ""}
+          ${item.priority ? badge(item.priority, PRIORITY_COLORS[item.priority]??"#64748b") : ""}
+          ${item.complexity ? badge(item.complexity, COMPLEXITY_COLORS[item.complexity]??"#64748b") : ""}
+          ${badge(item.entryProject,"#6366f1")}
+          ${feat ? `<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${feat.color}22;color:${feat.color};margin:1px 2px;border:1px solid ${feat.color}44">${feat.name}</span>` : ""}
+        </div>
+        <p style="font-size:15px;font-weight:600;color:#374151;margin:4px 0;${isIP ? "" : "text-decoration:line-through"}">${item.title}</p>
+        ${item.description ? `<p style="font-size:12px;color:#6b7280;margin:4px 0;font-style:italic">${item.description}</p>` : ""}
+        <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:#9ca3af;margin-top:8px">
+          ${item.dateRange ? `<span>📅 <strong style="color:#6b7280">${item.dateRange}</strong></span>` : `<span>📅 <strong style="color:#6b7280">${formatDate(item.entryDate)}</strong></span>`}
+          <span>⏱ <strong style="color:#6b7280">${durationStr}</strong></span>
+          ${(item.tags ?? []).length > 0 ? `<span>🏷 ${item.tags!.map(t => `#${t}`).join(", ")}</span>` : ""}
+        </div>
+        ${mediaHtml}${compareHtml}
+      </div>`;
+    } else {
+      const issue = row.item;
+      const isIP = issue.status === "in_progress";
+      const days = issue.date_started && issue.date_resolved
+        ? daysBetween(issue.date_started, issue.date_resolved) : null;
+      const typeColor = TYPE_COLORS[issue.type] ?? "#64748b";
+      const borderColor = isIP ? "#fde68a" : "#ddd6fe";
+      const bgColor = isIP ? "#fffbeb" : "#faf5ff";
+      return `<div style="border:1px solid ${borderColor};border-radius:8px;padding:14px;margin:8px 0;page-break-inside:avoid;background:${bgColor}">
+        <div style="margin-bottom:6px">
+          ${isIP ? badge("In Progress","#f59e0b") : badge("Raised Issue","#7c3aed")}
+          ${badge(issue.type.replace("bugfix","Bug Fix").replace("optimized","Optimized").replace("refactor","Refactor").replace("milestone","Milestone").replace("learning","Learning"), typeColor)}
+          ${badge(issue.priority, PRIORITY_COLORS[issue.priority]??"#64748b")}
+          ${badge(issue.project,"#6366f1")}
+        </div>
+        <p style="font-size:15px;font-weight:600;color:#374151;margin:4px 0;${isIP ? "" : "text-decoration:line-through"}">${issue.title}</p>
+        ${issue.description ? `<p style="font-size:12px;color:#6b7280;margin:4px 0;font-style:italic">${issue.description}</p>` : ""}
+        <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:#9ca3af;margin-top:8px">
+          ${issue.date_raised ? `<span>🚨 Raised: <strong style="color:#6b7280">${issue.date_raised}</strong></span>` : ""}
+          ${issue.date_started ? `<span>▶ Started: <strong style="color:#6b7280">${issue.date_started}</strong></span>` : ""}
+          ${issue.date_resolved ? `<span>✅ Resolved: <strong style="color:#6b7280">${issue.date_resolved}</strong></span>` : ""}
+          ${days !== null ? `<span>⏱ <strong style="color:#6b7280">${days} day${days !== 1 ? "s" : ""}</strong> to resolve</span>` : ""}
+        </div>
+        ${mediaHtml}${compareHtml}
+      </div>`;
+    }
+  }));
+
+  const ipTaskBlocks = itemBlocks.filter((_, i) => sortedItems[i].kind === "task" && (sortedItems[i] as { kind:"task";item:CompletedTaskItem }).item.status === "progress");
+  const doneTaskBlocks = itemBlocks.filter((_, i) => sortedItems[i].kind === "task" && (sortedItems[i] as { kind:"task";item:CompletedTaskItem }).item.status === "done");
+  const ipIssueBlocks = itemBlocks.filter((_, i) => sortedItems[i].kind === "issue" && (sortedItems[i] as { kind:"issue";item:RaisedIssue }).item.status === "in_progress");
+  const doneIssueBlocks = itemBlocks.filter((_, i) => sortedItems[i].kind === "issue" && (sortedItems[i] as { kind:"issue";item:RaisedIssue }).item.status === "resolved");
+
+  const ipCount = ipTaskBlocks.length + ipIssueBlocks.length;
+  const ipSection = ipCount > 0 ? `<h2>In Progress</h2>${[...ipTaskBlocks, ...ipIssueBlocks].join("")}` : "";
+  const taskSection = doneTaskBlocks.length > 0 ? `<h2>Completed Tasks</h2>${doneTaskBlocks.join("")}` : "";
+  const issueSection = doneIssueBlocks.length > 0 ? `<h2>Resolved Issues</h2>${doneIssueBlocks.join("")}` : "";
+
+  // Build a natural-language summary paragraph
+  const doneTasks = taskItems.filter(r => r.item.status === "done");
+  const featCount   = doneTasks.filter(r => r.item.type === "feature").length;
+  const bugCount    = doneTasks.filter(r => r.item.type === "bugfix").length + doneIssueBlocks.length;
+  const optCount    = doneTasks.filter(r => r.item.type === "optimized").length;
+  const refCount    = doneTasks.filter(r => r.item.type === "refactor").length;
+  const learnCount  = doneTasks.filter(r => r.item.type === "learning").length;
+  const milCount    = doneTasks.filter(r => r.item.type === "milestone").length;
+  const plainCount  = doneTasks.filter(r => (r.item.type ?? "task") === "task").length;
+  const projectSet  = Array.from(new Set([...taskItems.map(r => r.item.entryProject), ...issueItems.map(r => r.item.project)])).filter(Boolean);
+
+  const summaryParts: string[] = [];
+  if (featCount)  summaryParts.push(`${featCount} feature${featCount !== 1 ? "s" : ""} built`);
+  if (bugCount)   summaryParts.push(`${bugCount} bug${bugCount !== 1 ? "s" : ""} fixed`);
+  if (optCount)   summaryParts.push(`${optCount} optimization${optCount !== 1 ? "s" : ""} applied`);
+  if (refCount)   summaryParts.push(`${refCount} refactor${refCount !== 1 ? "s" : ""} done`);
+  if (milCount)   summaryParts.push(`${milCount} milestone${milCount !== 1 ? "s" : ""} reached`);
+  if (learnCount) summaryParts.push(`${learnCount} learning${learnCount !== 1 ? "s" : ""} recorded`);
+  if (plainCount) summaryParts.push(`${plainCount} general task${plainCount !== 1 ? "s" : ""} completed`);
+
+  const totalDone = doneTasks.length + doneIssueBlocks.length;
+  const summaryIntro = totalDone === 0
+    ? "No completed items in this period."
+    : `During ${dateLabel}, a total of <strong>${totalDone} item${totalDone !== 1 ? "s" : ""}</strong> were completed across <strong>${projectSet.join(" and ") || "all projects"}</strong>` +
+      (summaryParts.length ? ` — including ${summaryParts.join(", ")}` : "") + ".";
+
+  const ipSummary = ipCount > 0
+    ? ` Additionally, <strong>${ipCount} item${ipCount !== 1 ? "s" : ""}</strong> remain${ipCount === 1 ? "s" : ""} in progress.`
+    : "";
+
+  const generatedAt = new Date().toLocaleDateString("en-US", { month:"long", day:"numeric", year:"numeric" }) + " " +
+    new Date().toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" });
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>${reportTitle}</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:820px;margin:0 auto;padding:32px 24px;color:#111827;line-height:1.5}
+    h1{font-size:22px;color:#111827;border-bottom:3px solid #10b981;padding-bottom:10px;margin-bottom:4px}
+    .sub{color:#6b7280;font-size:13px;margin-bottom:16px}
+    .summary{display:flex;gap:0;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;margin-bottom:16px}
+    .s-item{flex:1;padding:14px 16px;text-align:center;border-right:1px solid #e5e7eb}
+    .s-item:last-child{border-right:none}
+    .s-val{font-size:26px;font-weight:700;color:#10b981}
+    .s-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#9ca3af;font-weight:700}
+    .text-summary{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;font-size:13px;color:#374151;line-height:1.7;margin-bottom:20px}
+    h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#374151;border-left:3px solid #10b981;padding-left:8px;margin:24px 0 8px}
+    @media print{body{padding:16px}@page{margin:1.2cm}h2{border-left:2px solid #10b981}}
+  </style></head><body>
+  <h1>${reportTitle}</h1>
+  <p class="sub">Victoria Court — Christian Jonel Cañanes &nbsp;·&nbsp; ${dateLabel} &nbsp;·&nbsp; Generated ${generatedAt}</p>
+  <div class="summary">
+    <div class="s-item"><div class="s-val">${totalDone}</div><div class="s-lbl">Completed</div></div>
+    <div class="s-item"><div class="s-val" style="color:#10b981">${doneTasks.length}</div><div class="s-lbl">Tasks</div></div>
+    <div class="s-item"><div class="s-val" style="color:#7c3aed">${doneIssueBlocks.length}</div><div class="s-lbl">Issues</div></div>
+    <div class="s-item"><div class="s-val" style="color:#f97316">${bugCount}</div><div class="s-lbl">Bugs Fixed</div></div>
+    <div class="s-item"><div class="s-val" style="color:#06b6d4">${featCount}</div><div class="s-lbl">Features</div></div>
+    ${ipCount > 0 ? `<div class="s-item"><div class="s-val" style="color:#f59e0b">${ipCount}</div><div class="s-lbl">In Progress</div></div>` : ""}
+  </div>
+  <div class="text-summary">${summaryIntro}${ipSummary}</div>
+  ${taskSection}${issueSection}${ipSection}
+  ${items.length === 0 ? `<p style="color:#9ca3af;text-align:center;padding:48px">No items in this period.</p>` : ""}
+  </body></html>`;
+
+  const win = window.open("", "_blank", "width=960,height=750");
+  if (!win) { alert("Pop-up blocked — please allow pop-ups for this site."); return; }
+  win.document.write(html);
+  win.document.close();
+  const imgs = Array.from(win.document.images);
+  if (imgs.length === 0) {
+    setTimeout(() => { win.focus(); win.print(); }, 250);
+  } else {
+    let loaded = 0;
+    const tryPrint = () => { if (++loaded === imgs.length) setTimeout(() => { win.focus(); win.print(); }, 250); };
+    imgs.forEach(img => { if (img.complete) tryPrint(); else { img.onload = tryPrint; img.onerror = tryPrint; } });
+  }
+}
+
+// ─── Per-item enhancement widget ─────────────────────────────────────────────
+function ItemEnhancer({
+  enh,
+  onChange,
+}: {
+  enh: TaskEnhancement;
+  onChange: (next: TaskEnhancement) => void;
+}) {
+  if (!enh.open) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-2 pl-2 border-l-2 border-slate-800">
+      {/* Media row */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {enh.media.map((m, mi) => (
+          <div key={mi} className="relative group w-16 h-16 rounded-lg overflow-hidden border border-slate-700 shrink-0">
+            <img src={m.preview} alt="" className="w-full h-full object-cover" />
+            <div className="absolute inset-0 flex flex-col justify-between p-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/70">
+              <button onClick={() => onChange({ ...enh, media: enh.media.filter((_, j) => j !== mi) })}
+                className="self-end text-red-400 leading-none"><Trash2 size={9} /></button>
+              <input value={m.caption} onChange={e => onChange({ ...enh, media: enh.media.map((x, j) => j === mi ? { ...x, caption: e.target.value } : x) })}
+                placeholder="caption" className="text-[9px] bg-transparent text-slate-300 outline-none w-full" />
+            </div>
+          </div>
+        ))}
+        <label className="flex flex-col items-center justify-center w-16 h-16 rounded-lg border border-dashed border-slate-700 text-slate-600 hover:border-emerald-700/50 hover:text-emerald-400 transition-colors cursor-pointer shrink-0">
+          <input type="file" accept="image/*" className="hidden" onChange={e => {
+            const f = e.target.files?.[0]; if (!f) return;
+            onChange({ ...enh, media: [...enh.media, { file: f, preview: URL.createObjectURL(f), caption: "" }] });
+            e.target.value = "";
+          }} />
+          <ImageIcon size={12} /><span className="text-[9px] mt-0.5">+ Media</span>
+        </label>
+        {/* compare toggle */}
+        <button onClick={() => onChange({ ...enh, compare: [...enh.compare, { label: "", before: { file: null, preview: "", note: "" }, after: { file: null, preview: "", note: "" } }] })}
+          className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-slate-700 text-slate-500 hover:text-emerald-400 hover:border-emerald-700/50 transition-colors whitespace-nowrap">
+          <Plus size={9} /> Before/After
+        </button>
+      </div>
+      {/* Compare blocks */}
+      {enh.compare.map((c, ci) => (
+        <div key={ci} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2 flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5">
+            <input value={c.label} onChange={e => onChange({ ...enh, compare: enh.compare.map((x, j) => j === ci ? { ...x, label: e.target.value } : x) })}
+              placeholder="Label…" className="flex-1 text-[10px] bg-transparent border-b border-slate-800 text-slate-300 outline-none py-px placeholder:text-slate-700" />
+            <button onClick={() => onChange({ ...enh, compare: enh.compare.filter((_, j) => j !== ci) })} className="text-slate-700 hover:text-red-400 transition-colors"><Trash2 size={10} /></button>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(["before", "after"] as const).map(side => {
+              const slot = c[side];
+              return (
+                <div key={side} className="flex flex-col gap-1">
+                  <p className="text-[8px] uppercase tracking-widest text-slate-600 font-bold">{side}</p>
+                  {slot.preview ? (
+                    <div className="relative group rounded overflow-hidden border border-slate-800">
+                      <img src={slot.preview} alt={side} className="w-full h-16 object-cover" />
+                      <label className="absolute inset-0 flex items-center justify-center bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                        <input type="file" accept="image/*" className="hidden" onChange={e => {
+                          const f = e.target.files?.[0]; if (!f) return;
+                          onChange({ ...enh, compare: enh.compare.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x) });
+                        }} />
+                        <ImageIcon size={11} className="text-slate-300" />
+                      </label>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center h-16 rounded border border-dashed border-slate-700 text-slate-600 hover:border-emerald-700/40 hover:text-emerald-400 transition-colors cursor-pointer">
+                      <input type="file" accept="image/*" className="hidden" onChange={e => {
+                        const f = e.target.files?.[0]; if (!f) return;
+                        onChange({ ...enh, compare: enh.compare.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], file: f, preview: URL.createObjectURL(f) } } : x) });
+                      }} />
+                      <ImageIcon size={11} /><span className="text-[9px] mt-0.5">Upload</span>
+                    </label>
+                  )}
+                  <input value={slot.note} onChange={e => onChange({ ...enh, compare: enh.compare.map((x, j) => j === ci ? { ...x, [side]: { ...x[side], note: e.target.value } } : x) })}
+                    placeholder="Note…" className="text-[10px] text-slate-500 bg-transparent border-b border-slate-800/60 outline-none py-px placeholder:text-slate-700" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WeeklyReportModal({
+  open, onClose, items, features, dateLabel, onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  items: CPRow[];
+  features: Feature[];
+  dateLabel: string;
+  onSaved: (r: SavedReport) => void;
+}) {
+  const defaultTitle = `Weekly Report — ${dateLabel}`;
+  const [reportTitle, setReportTitle] = useState(defaultTitle);
+  const [enhancements, setEnhancements] = useState<Record<string, TaskEnhancement>>({});
+  const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    if (!open) { setEnhancements({}); setReportTitle(defaultTitle); }
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!open) return null;
+
+  const allTaskRows = items.filter(r => r.kind === "task") as { kind: "task"; item: CompletedTaskItem }[];
+  const allIssueRows = items.filter(r => r.kind === "issue") as { kind: "issue"; item: RaisedIssue }[];
+  const ipTaskItems = allTaskRows.filter(r => r.item.status === "progress");
+  const taskItems = allTaskRows.filter(r => r.item.status === "done");
+  const ipIssueItems = allIssueRows.filter(r => r.item.status === "in_progress");
+  const issueItems = allIssueRows.filter(r => r.item.status === "resolved");
+
+  const daysBetween = (from: string, to: string) =>
+    Math.max(0, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000));
+  const today = new Date().toISOString().slice(0, 10);
+
+  const getEnh = (key: string): TaskEnhancement =>
+    enhancements[key] ?? { open: false, media: [], compare: [] };
+  const setEnh = (key: string, val: TaskEnhancement) =>
+    setEnhancements(prev => ({ ...prev, [key]: val }));
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    try {
+      await generatePDFReport(items, enhancements, dateLabel, features, reportTitle);
+      // Save to Supabase
+      const { data, error } = await supabase
+        .from("weekly_reports")
+        .insert({ title: reportTitle, date_label: dateLabel, items_snapshot: items })
+        .select()
+        .single();
+      if (!error && data) onSaved(data as SavedReport);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return (
+    <>
+      <div onClick={onClose} className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" />
+      <div className="fixed inset-y-0 right-0 z-[55] w-full max-w-2xl bg-slate-950 border-l border-slate-800 flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-800 shrink-0">
+          <div className="flex-1 min-w-0">
+            <input
+              value={reportTitle}
+              onChange={e => setReportTitle(e.target.value)}
+              className="w-full bg-transparent text-sm font-bold text-emerald-300 outline-none placeholder:text-emerald-800 truncate"
+              placeholder="Report title…"
+            />
+            <p className="text-[11px] text-slate-500 mt-0.5">{dateLabel} · {items.length} item{items.length !== 1 ? "s" : ""}</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              className="flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg border border-emerald-700/50 bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25 transition-colors font-semibold disabled:opacity-50"
+            >
+              <BarChart2 size={13} />
+              {generating ? "Generating…" : "Download PDF"}
+            </button>
+            <button onClick={onClose} className="p-2 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-6">
+          {/* Summary stats */}
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              { label: "Total", value: items.length, color: "text-emerald-400" },
+              { label: "In Progress", value: ipTaskItems.length + ipIssueItems.length, color: "text-amber-400" },
+              { label: "Done", value: taskItems.length + issueItems.length, color: "text-teal-400" },
+              { label: "Bug Fixes", value: allTaskRows.filter(r => r.item.type === "bugfix").length + allIssueRows.length, color: "text-orange-400" },
+            ].map(s => (
+              <div key={s.label} className="flex flex-col items-center justify-center py-3 rounded-xl border border-slate-800 bg-slate-900/60">
+                <span className={`text-xl font-bold font-mono ${s.color}`}>{s.value}</span>
+                <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold mt-0.5">{s.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Completed Tasks */}
+          {taskItems.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+                <CheckCircle2 size={11} className="text-emerald-500" /> Completed Tasks
+              </p>
+              {taskItems.map(({ item }, i) => {
+                const feat = features.find(f => f.id === item.featureId);
+                const durStr = taskDurationStr(item.dateRange, item.entryDate);
+                const key = item.title;
+                const enh = getEnh(key);
+                const hasEnh = enh.media.length > 0 || enh.compare.length > 0;
+                return (
+                  <div key={i} className="rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start gap-1 flex-wrap mb-1">
+                          {item.type && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{item.type}</span>}
+                          {item.priority && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{item.priority}</span>}
+                          {item.complexity && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{item.complexity}</span>}
+                          {feat && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide" style={{ color: feat.color, background: feat.color + "22" }}>{feat.name}</span>}
+                        </div>
+                        <p className="text-sm text-slate-200 leading-snug">{item.title}</p>
+                        {item.description && <p className="text-[11px] text-slate-500 mt-0.5 truncate">{item.description}</p>}
+                        <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-slate-600">
+                          <span>📅 {item.dateRange ?? formatDate(item.entryDate)}</span>
+                          <span>⏱ {durStr}</span>
+                          {(item.tags ?? []).length > 0 && <span>🏷 {item.tags!.map(t => `#${t}`).join(" ")}</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setEnh(key, { ...enh, open: !enh.open })}
+                        className={`shrink-0 p-1.5 rounded-lg border transition-colors text-[10px] ${enh.open || hasEnh ? "border-emerald-700/50 text-emerald-400 bg-emerald-400/10" : "border-slate-700 text-slate-600 hover:text-slate-300 hover:border-slate-600"}`}
+                        title="Add media / compare"
+                      >
+                        <ImageIcon size={11} />
+                      </button>
+                    </div>
+                    <ItemEnhancer enh={enh} onChange={val => setEnh(key, val)} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Resolved Issues */}
+          {issueItems.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+                <AlertCircle size={11} className="text-violet-400" /> Resolved Issues
+              </p>
+              {issueItems.map(({ item: issue }) => {
+                const days = issue.date_started && issue.date_resolved
+                  ? daysBetween(issue.date_started, issue.date_resolved) : null;
+                const key = issue.id;
+                const enh = getEnh(key);
+                const hasEnh = enh.media.length > 0 || enh.compare.length > 0;
+                return (
+                  <div key={issue.id} className="rounded-xl border border-violet-900/30 bg-violet-400/5 px-4 py-3">
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-violet-400 bg-violet-400/15">Issue</span>
+                          <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{issue.type}</span>
+                          <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{issue.priority}</span>
+                        </div>
+                        <p className="text-sm text-slate-200 leading-snug">{issue.title}</p>
+                        <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-slate-600">
+                          {issue.date_raised && <span>🚨 {issue.date_raised}</span>}
+                          {issue.date_started && <span>▶ {issue.date_started}</span>}
+                          {issue.date_resolved && <span>✅ {issue.date_resolved}</span>}
+                          {days !== null && <span>⏱ {days}d to resolve</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setEnh(key, { ...enh, open: !enh.open })}
+                        className={`shrink-0 p-1.5 rounded-lg border transition-colors ${enh.open || hasEnh ? "border-violet-700/50 text-violet-400 bg-violet-400/10" : "border-slate-700 text-slate-600 hover:text-slate-300 hover:border-slate-600"}`}
+                        title="Add media / compare"
+                      >
+                        <ImageIcon size={11} />
+                      </button>
+                    </div>
+                    <ItemEnhancer enh={enh} onChange={val => setEnh(key, val)} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* In Progress Tasks + Issues — shown last */}
+          {(ipTaskItems.length > 0 || ipIssueItems.length > 0) && (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" /> In Progress
+              </p>
+              {[...ipTaskItems, ...ipIssueItems].map((row, i) => {
+                const key = row.kind === "task" ? row.item.title : row.item.id;
+                const enh = getEnh(key);
+                const hasEnh = enh.media.length > 0 || enh.compare.length > 0;
+                if (row.kind === "task") {
+                  const item = row.item;
+                  const feat = features.find(f => f.id === item.featureId);
+                  const sincedays = daysBetween(item.entryDate, today);
+                  return (
+                    <div key={i} className="rounded-xl border border-amber-800/40 bg-amber-400/5 px-4 py-3">
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start gap-1 flex-wrap mb-1">
+                            <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-amber-400 bg-amber-400/15">In Progress</span>
+                            {item.type && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{item.type}</span>}
+                            {item.priority && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{item.priority}</span>}
+                            {item.complexity && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{item.complexity}</span>}
+                            {feat && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide" style={{ color: feat.color, background: feat.color + "22" }}>{feat.name}</span>}
+                          </div>
+                          <p className="text-sm text-slate-200 leading-snug">{item.title}</p>
+                          {item.description && <p className="text-[11px] text-slate-500 mt-0.5 truncate">{item.description}</p>}
+                          <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-slate-600">
+                            <span>📅 {formatDate(item.entryDate)}</span>
+                            <span>⏱ {sincedays === 0 ? "Today" : `${sincedays}d`} in progress</span>
+                          </div>
+                        </div>
+                        <button onClick={() => setEnh(key, { ...enh, open: !enh.open })}
+                          className={`shrink-0 p-1.5 rounded-lg border transition-colors ${enh.open || hasEnh ? "border-amber-700/50 text-amber-400 bg-amber-400/10" : "border-slate-700 text-slate-600 hover:text-slate-300 hover:border-slate-600"}`}>
+                          <ImageIcon size={11} />
+                        </button>
+                      </div>
+                      <ItemEnhancer enh={enh} onChange={val => setEnh(key, val)} />
+                    </div>
+                  );
+                } else {
+                  const issue = row.item;
+                  return (
+                    <div key={i} className="rounded-xl border border-amber-800/40 bg-amber-400/5 px-4 py-3">
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap gap-1 mb-1">
+                            <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-amber-400 bg-amber-400/15">In Progress</span>
+                            <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{issue.type}</span>
+                            <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide bg-slate-700 text-slate-300">{issue.priority}</span>
+                          </div>
+                          <p className="text-sm text-slate-200 leading-snug">{issue.title}</p>
+                          <div className="flex flex-wrap gap-3 mt-1 text-[10px] text-slate-600">
+                            {issue.date_raised && <span>🚨 {issue.date_raised}</span>}
+                            {issue.date_started && <span>▶ {issue.date_started}</span>}
+                          </div>
+                        </div>
+                        <button onClick={() => setEnh(key, { ...enh, open: !enh.open })}
+                          className={`shrink-0 p-1.5 rounded-lg border transition-colors ${enh.open || hasEnh ? "border-amber-700/50 text-amber-400 bg-amber-400/10" : "border-slate-700 text-slate-600 hover:text-slate-300 hover:border-slate-600"}`}>
+                          <ImageIcon size={11} />
+                        </button>
+                      </div>
+                      <ItemEnhancer enh={enh} onChange={val => setEnh(key, val)} />
+                    </div>
+                  );
+                }
+              })}
+            </div>
+          )}
+
+          {items.length === 0 && (
+            <p className="text-center text-slate-600 text-sm py-12">No completed items in this period.</p>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// All Tasks Panel — full history of completed tasks + resolved issues
+// ════════════════════════════════════════════════════════════════════
+const ALL_TASKS_PER_PAGE = 20;
+
+function AllTasksPanel({
+  open, onClose, completedItems, resolvedIssues, features, readOnly, onReopenTask, onOpenIssue, onGenerateReport,
+}: {
+  open: boolean;
+  onClose: () => void;
+  completedItems: CompletedTaskItem[];
+  resolvedIssues: RaisedIssue[];
+  features: Feature[];
+  readOnly: boolean;
+  onReopenTask: (title: string) => void;
+  onOpenIssue: (issue: RaisedIssue) => void;
+  onGenerateReport: (rows: CPRow[], label: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | "tasks" | "issues">("all");
+  const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [dateRange, setDateRange] = useState<"all" | "week" | "month" | "year">("all");
+  const [taskTypeFilter, setTaskTypeFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  useEffect(() => { setPage(1); }, [search, kindFilter, projectFilter, dateRange, taskTypeFilter]);
+
+  if (!open) return null;
+
+  const today = new Date().toISOString().slice(0, 10);
+  let cutoff: string | null = null;
+  if (dateRange === "week") { const d = new Date(); d.setDate(d.getDate() - 6); cutoff = d.toISOString().slice(0, 10); }
+  else if (dateRange === "month") { cutoff = today.slice(0, 7) + "-01"; }
+  else if (dateRange === "year") { cutoff = today.slice(0, 4) + "-01-01"; }
+
+  const allRows: CPRow[] = [
+    ...completedItems.map(i => ({ kind: "task" as const, item: i })),
+    ...resolvedIssues.map(i => ({ kind: "issue" as const, item: i })),
+  ].sort((a, b) => {
+    const da = a.kind === "task" ? a.item.entryDate : (a.item.date_resolved ?? a.item.date_raised);
+    const db = b.kind === "task" ? b.item.entryDate : (b.item.date_resolved ?? b.item.date_raised);
+    return db.localeCompare(da);
+  });
+
+  const allProjects = Array.from(new Set([
+    ...completedItems.map(i => i.entryProject),
+    ...resolvedIssues.map(i => i.project),
+  ])).filter(Boolean).sort();
+
+  const q = search.trim().toLowerCase();
+  const filtered = allRows.filter(row => {
+    if (kindFilter === "tasks" && row.kind !== "task") return false;
+    if (kindFilter === "issues" && row.kind !== "issue") return false;
+    if (projectFilter !== "all") {
+      const proj = row.kind === "task" ? row.item.entryProject : row.item.project;
+      if (proj !== projectFilter) return false;
+    }
+    if (cutoff) {
+      const d = row.kind === "task" ? row.item.entryDate : (row.item.date_resolved ?? row.item.date_raised);
+      if (d < cutoff) return false;
+    }
+    if (taskTypeFilter !== "all" && row.kind === "task") {
+      if ((row.item.type ?? "task") !== taskTypeFilter) return false;
+    }
+    if (q) {
+      const text = row.kind === "task"
+        ? [row.item.title, row.item.description, row.item.entryProject, ...(row.item.tags ?? [])].join(" ").toLowerCase()
+        : [row.item.title, row.item.description, row.item.project].join(" ").toLowerCase();
+      if (!text.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const totalPages = Math.ceil(filtered.length / ALL_TASKS_PER_PAGE);
+  const paged = filtered.slice((page - 1) * ALL_TASKS_PER_PAGE, page * ALL_TASKS_PER_PAGE);
+
+  const taskCount = allRows.filter(r => r.kind === "task").length;
+  const issueCount = allRows.filter(r => r.kind === "issue").length;
+
+  return (
+    <>
+      <div onClick={onClose} className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm" />
+      <div className="fixed inset-y-0 right-0 z-[55] w-full max-w-xl bg-slate-950 border-l border-slate-800 flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-800 shrink-0">
+          <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-bold tracking-widest uppercase text-emerald-300">All Completed</h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">{taskCount} tasks · {issueCount} issues</p>
+          </div>
+          {!readOnly && (
+            <button
+              onClick={() => {
+                const label = projectFilter !== "all" ? projectFilter : "All Projects";
+                onGenerateReport(filtered, label);
+              }}
+              className="flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors font-medium whitespace-nowrap"
+            >
+              <BarChart2 size={11} /> Generate Report
+            </button>
+          )}
+          <button onClick={onClose} className="p-2 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors">
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* Search + filters */}
+        <div className="flex flex-col gap-2 px-5 py-3 border-b border-slate-800/60 shrink-0">
+          <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5">
+            <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" /></svg>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search tasks, issues, tags…"
+              className="flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
+            />
+            {search && <button onClick={() => setSearch("")} className="text-slate-600 hover:text-slate-300 transition-colors"><X size={12} /></button>}
+          </div>
+          {/* Kind */}
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
+            {(["all", "tasks", "issues"] as const).map(f => (
+              <button key={f} onClick={() => setKindFilter(f)}
+                className={`shrink-0 text-[10px] px-2.5 py-1 rounded-full border font-medium transition-colors ${kindFilter === f ? "bg-emerald-400/15 border-emerald-400/40 text-emerald-300" : "border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700"}`}>
+                {f === "all" ? `All (${allRows.length})` : f === "tasks" ? `Tasks (${taskCount})` : `Issues (${issueCount})`}
+              </button>
+            ))}
+            {filtered.length !== allRows.length && (
+              <span className="text-[10px] text-slate-600 ml-auto shrink-0">{filtered.length} shown</span>
+            )}
+          </div>
+          {/* Project */}
+          {allProjects.length > 0 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
+              {[["all", "All Projects"], ...allProjects.map(p => [p, p])].map(([v, label]) => (
+                <button key={v} onClick={() => setProjectFilter(v)}
+                  className={`shrink-0 text-[9px] px-2.5 py-1 rounded-full border font-bold tracking-wide uppercase transition-colors ${projectFilter === v ? "border-indigo-500/50 bg-indigo-400/10 text-indigo-300" : "border-slate-800 text-slate-600 hover:text-slate-300 hover:border-slate-700"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Date range */}
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
+            {([["all","All Time"], ["week","This Week"], ["month","This Month"], ["year","This Year"]] as const).map(([v, label]) => (
+              <button key={v} onClick={() => setDateRange(v)}
+                className={`shrink-0 text-[9px] px-2.5 py-1 rounded-full border font-bold tracking-wide uppercase transition-colors ${dateRange === v ? "border-sky-500/50 bg-sky-400/10 text-sky-300" : "border-slate-800 text-slate-600 hover:text-slate-300 hover:border-slate-700"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Task type */}
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
+            {([["all","All Types"], ["feature","Feature"], ["bugfix","Bug Fix"], ["optimized","Optimized"], ["task","Task"], ["milestone","Milestone"], ["refactor","Refactor"], ["learning","Learning"]] as const).map(([v, label]) => (
+              <button key={v} onClick={() => setTaskTypeFilter(v)}
+                className={`shrink-0 text-[9px] px-2.5 py-1 rounded-full border font-bold tracking-wide uppercase transition-colors ${taskTypeFilter === v ? "border-violet-500/50 bg-violet-400/10 text-violet-300" : "border-slate-800 text-slate-600 hover:text-slate-300 hover:border-slate-700"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto px-5 py-3 flex flex-col gap-0.5">
+          {paged.length === 0 ? (
+            <p className="text-center text-slate-600 text-sm py-16">Nothing found.</p>
+          ) : paged.map((row, i) => {
+            if (row.kind === "task") {
+              const item = row.item;
+              const feat = features.find(f => f.id === item.featureId);
+              const tm = TYPE_META[(item.type ?? "task") as keyof typeof TYPE_META] ?? TYPE_META.task;
+              const TIcon = tm.icon;
+              return (
+                <div key={`t-${i}`} className="group flex items-start gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
+                  <CheckCircle2 size={13} className="text-emerald-400/50 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                      <span className="text-[9px] text-slate-600 font-medium">{item.entryProject}</span>
+                      <span className={`flex items-center gap-0.5 text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>
+                        <TIcon size={8} />{tm.label}
+                      </span>
+                      {item.priority && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${PRIORITY_META[item.priority].text} ${PRIORITY_META[item.priority].bg}`}>{PRIORITY_META[item.priority].label}</span>}
+                      {item.complexity && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${COMPLEXITY_META[item.complexity].text} ${COMPLEXITY_META[item.complexity].bg}`}>{COMPLEXITY_META[item.complexity].label}</span>}
+                      {feat && <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide" style={{ color: feat.color, background: feat.color + "22" }}>{feat.name}</span>}
+                    </div>
+                    <p className="text-[13px] font-medium text-slate-400 leading-snug line-through decoration-slate-600/60">{item.title}</p>
+                    {item.description && <p className="text-[10px] text-slate-600 mt-0.5 truncate">{item.description}</p>}
+                    <div className="flex flex-wrap gap-2 mt-1 text-[10px] text-slate-700">
+                      <span>{item.dateRange ?? formatDate(item.entryDate)}</span>
+                      <span>⏱ {taskDurationStr(item.dateRange, item.entryDate)}</span>
+                      {(item.tags ?? []).length > 0 && <span>{item.tags!.map(t => `#${t}`).join(" ")}</span>}
+                    </div>
+                  </div>
+                  {!readOnly && (
+                    <button onClick={() => onReopenTask(item.title)}
+                      className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 text-[10px] px-2 py-1 rounded-lg bg-yellow-500/10 border border-yellow-500/25 text-yellow-400 hover:bg-yellow-500/20 transition-all whitespace-nowrap">
+                      ↩
+                    </button>
+                  )}
+                </div>
+              );
+            }
+
+            const issue = row.item;
+            const tm = ISSUE_TYPE_META[issue.type] ?? ISSUE_TYPE_META.other;
+            const pm = PRIORITY_META[issue.priority];
+            return (
+              <div key={`iss-${issue.id}`} className="group flex items-start gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-slate-800 hover:bg-slate-800/25 transition-all">
+                <CheckCircle2 size={13} className="text-violet-400/50 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                    <span className="text-[9px] text-slate-600 font-medium">{issue.project}</span>
+                    <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${tm.text} ${tm.bg}`}>{tm.label}</span>
+                    {pm && <span className={`text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide ${pm.text} ${pm.bg}`}>{pm.label}</span>}
+                    <span className="text-[8px] font-bold px-1.5 py-px rounded uppercase tracking-wide text-violet-400 bg-violet-400/10">Issue</span>
+                  </div>
+                  <p className="text-[13px] font-medium text-slate-400 leading-snug line-through decoration-slate-600/60">{issue.title}</p>
+                  {issue.description && <p className="text-[10px] text-slate-600 mt-0.5 truncate">{issue.description}</p>}
+                  <div className="flex flex-wrap gap-2 mt-1 text-[10px] text-slate-700">
+                    {issue.date_raised && <span>Raised {issue.date_raised}</span>}
+                    {issue.date_resolved && <span>· Resolved {issue.date_resolved}</span>}
+                  </div>
+                </div>
+                <button onClick={() => onOpenIssue(issue)}
+                  className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 text-[10px] px-2 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-slate-200 transition-all whitespace-nowrap">
+                  View
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-5 py-3 border-t border-slate-800 shrink-0">
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+              className="text-[11px] px-3 py-1.5 rounded-lg border border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700 disabled:opacity-30 transition-colors">
+              ← Prev
+            </button>
+            <span className="text-[11px] text-slate-600">{page} / {totalPages} · {filtered.length} items</span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+              className="text-[11px] px-3 py-1.5 rounded-lg border border-slate-800 text-slate-500 hover:text-slate-300 hover:border-slate-700 disabled:opacity-30 transition-colors">
+              Next →
+            </button>
+          </div>
+        )}
+      </div>
+    </>
   );
 }

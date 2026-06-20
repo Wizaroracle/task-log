@@ -18,7 +18,7 @@ export type Task = {
   title: string;
   description?: string;
   type?: "feature" | "bugfix" | "task" | "milestone" | "learning" | "optimized" | "refactor";
-  status: "done" | "progress" | "planned";
+  status: "done" | "progress" | "planned" | "deployment";
   priority?: "urgent" | "major" | "minor";
   complexity?: "simple" | "hard" | "complex";
   dateRange?: string;
@@ -78,9 +78,9 @@ export type RaisedIssue = {
   project: string;
   title: string;
   description?: string;
-  type: "bugfix" | "feature" | "optimized" | "task" | "other";
+  type: "bugfix" | "feature" | "optimized" | "task" | "milestone" | "learning" | "refactor" | "other";
   priority: "urgent" | "major" | "minor";
-  status: "open" | "in_progress" | "resolved";
+  status: "open" | "in_progress" | "deployment" | "resolved";
   date_raised: string;
   date_started?: string;
   date_resolved?: string;
