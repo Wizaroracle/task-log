@@ -306,6 +306,7 @@ export default function ProjectDashboard() {
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [reportItems, setReportItems] = useState<CPRow[]>([]);
   const [reportDateLabel, setReportDateLabel] = useState("");
+  const [reportTitleOverride, setReportTitleOverride] = useState("");
   const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
@@ -2502,6 +2503,7 @@ export default function ProjectDashboard() {
                           ];
                           setReportItems([...ipRows, ...combined]);
                           setReportDateLabel(dateLabel);
+                          setReportTitleOverride("");
                           setReportModalOpen(true);
                         }}
                         className="flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-lg border border-emerald-700/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 transition-colors font-medium whitespace-nowrap"
@@ -3266,6 +3268,7 @@ export default function ProjectDashboard() {
         onGenerateReport={(rows, label) => {
           setReportItems(rows);
           setReportDateLabel(label);
+          setReportTitleOverride(`All Tasks Report — ${label}`);
           setAllTasksOpen(false);
           setReportModalOpen(true);
         }}
@@ -3277,6 +3280,7 @@ export default function ProjectDashboard() {
         items={reportItems}
         features={features}
         dateLabel={reportDateLabel}
+        titleOverride={reportTitleOverride}
         onSaved={(r) => setSavedReports(prev => [r, ...prev])}
       />
       {detailIssue && (
@@ -5325,23 +5329,24 @@ async function generatePDFReport(
   const plainCount  = doneTasks.filter(r => (r.item.type ?? "task") === "task").length;
   const projectSet  = Array.from(new Set([...taskItems.map(r => r.item.entryProject), ...issueItems.map(r => r.item.project)])).filter(Boolean);
 
+  const b = (n: number) => `<strong style="color:#111827">${n}</strong>`;
   const summaryParts: string[] = [];
-  if (featCount)  summaryParts.push(`${featCount} feature${featCount !== 1 ? "s" : ""} built`);
-  if (bugCount)   summaryParts.push(`${bugCount} bug${bugCount !== 1 ? "s" : ""} fixed`);
-  if (optCount)   summaryParts.push(`${optCount} optimization${optCount !== 1 ? "s" : ""} applied`);
-  if (refCount)   summaryParts.push(`${refCount} refactor${refCount !== 1 ? "s" : ""} done`);
-  if (milCount)   summaryParts.push(`${milCount} milestone${milCount !== 1 ? "s" : ""} reached`);
-  if (learnCount) summaryParts.push(`${learnCount} learning${learnCount !== 1 ? "s" : ""} recorded`);
-  if (plainCount) summaryParts.push(`${plainCount} general task${plainCount !== 1 ? "s" : ""} completed`);
+  if (featCount)  summaryParts.push(`${b(featCount)} feature${featCount !== 1 ? "s" : ""} built`);
+  if (bugCount)   summaryParts.push(`${b(bugCount)} bug${bugCount !== 1 ? "s" : ""} fixed`);
+  if (optCount)   summaryParts.push(`${b(optCount)} optimization${optCount !== 1 ? "s" : ""} applied`);
+  if (refCount)   summaryParts.push(`${b(refCount)} refactor${refCount !== 1 ? "s" : ""} done`);
+  if (milCount)   summaryParts.push(`${b(milCount)} milestone${milCount !== 1 ? "s" : ""} reached`);
+  if (learnCount) summaryParts.push(`${b(learnCount)} learning${learnCount !== 1 ? "s" : ""} recorded`);
+  if (plainCount) summaryParts.push(`${b(plainCount)} general task${plainCount !== 1 ? "s" : ""} completed`);
 
   const totalDone = doneTasks.length + doneIssueBlocks.length;
   const summaryIntro = totalDone === 0
     ? "No completed items in this period."
-    : `During ${dateLabel}, a total of <strong>${totalDone} item${totalDone !== 1 ? "s" : ""}</strong> were completed across <strong>${projectSet.join(" and ") || "all projects"}</strong>` +
+    : `During <strong style="color:#111827">${dateLabel}</strong>, <strong style="color:#111827">Nel</strong> completed a total of <strong style="color:#10b981;font-size:15px">${totalDone} item${totalDone !== 1 ? "s" : ""}</strong> across <strong style="color:#111827">${projectSet.join(" and ") || "all projects"}</strong>` +
       (summaryParts.length ? ` — including ${summaryParts.join(", ")}` : "") + ".";
 
   const ipSummary = ipCount > 0
-    ? ` Additionally, <strong>${ipCount} item${ipCount !== 1 ? "s" : ""}</strong> remain${ipCount === 1 ? "s" : ""} in progress.`
+    ? ` Additionally, <strong style="color:#f59e0b">${ipCount} item${ipCount !== 1 ? "s" : ""}</strong> remain${ipCount === 1 ? "s" : ""} in progress.`
     : "";
 
   const generatedAt = new Date().toLocaleDateString("en-US", { month:"long", day:"numeric", year:"numeric" }) + " " +
@@ -5359,7 +5364,7 @@ async function generatePDFReport(
     .s-item:last-child{border-right:none}
     .s-val{font-size:26px;font-weight:700;color:#10b981}
     .s-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#9ca3af;font-weight:700}
-    .text-summary{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;font-size:13px;color:#374151;line-height:1.7;margin-bottom:20px}
+    .text-summary{background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #10b981;border-radius:8px;padding:16px 20px;font-size:14px;color:#374151;line-height:1.85;margin-bottom:20px}
     h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#374151;border-left:3px solid #10b981;padding-left:8px;margin:24px 0 8px}
     @media print{body{padding:16px}@page{margin:1.2cm}h2{border-left:2px solid #10b981}}
   </style></head><body>
@@ -5477,26 +5482,28 @@ function ItemEnhancer({
 }
 
 function WeeklyReportModal({
-  open, onClose, items, features, dateLabel, onSaved,
+  open, onClose, items, features, dateLabel, titleOverride, onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   items: CPRow[];
   features: Feature[];
   dateLabel: string;
+  titleOverride?: string;
   onSaved: (r: SavedReport) => void;
 }) {
-  const defaultTitle = `Weekly Report — ${dateLabel}`;
+  const defaultTitle = titleOverride || `Weekly Report — ${dateLabel}`;
   const [reportTitle, setReportTitle] = useState(defaultTitle);
   const [enhancements, setEnhancements] = useState<Record<string, TaskEnhancement>>({});
   const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     if (!open) { setEnhancements({}); setReportTitle(defaultTitle); }
+    if (open) setReportTitle(defaultTitle);
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, defaultTitle]);
 
   if (!open) return null;
 
