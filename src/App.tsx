@@ -30,6 +30,7 @@ import {
   GitCommitHorizontal,
   Crosshair,
   Rocket,
+  Calendar,
 } from "lucide-react";
 import { PROFILE } from "./utils/profile-data";
 import type { CompareItem, Entry, EntryMedia, Feature, RaisedIssue, Task } from "./utils/entries/entries";
@@ -301,6 +302,11 @@ export default function ProjectDashboard() {
   const [completedFeatureFilter, setCompletedFeatureFilter] = useState<string>("all");
   // "Done" action menu — tracks which task title has the popup open
   const [doneMenuTask, setDoneMenuTask] = useState<string | null>(null);
+  const [dateOverrideModal, setDateOverrideModal] = useState<
+    | { kind: "task"; taskTitle: string; label: string; startDate: string; endDate: string }
+    | { kind: "issue"; issueId: string; label: string; startDate: string; endDate: string }
+    | null
+  >(null);
   // Issue resolve menu — tracks which issue id has the popup open
   const [resolveMenuIssue, setResolveMenuIssue] = useState<string | null>(null);
   const [reportModalOpen, setReportModalOpen] = useState(false);
@@ -864,7 +870,43 @@ export default function ProjectDashboard() {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   }
 
-  async function markTaskDone(taskTitle: string) {
+  function openDateOverrideModal(taskTitle: string) {
+    const today = new Date().toISOString().slice(0, 10);
+    const affected = entries
+      .filter((e) => e.tasks.some((t) => t.title === taskTitle && t.status === "progress"))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    setDateOverrideModal({
+      kind: "task",
+      taskTitle,
+      label: taskTitle,
+      startDate: affected[0]?.date ?? today,
+      endDate: today,
+    });
+    setDoneMenuTask(null);
+  }
+
+  function openIssueDateOverrideModal(issue: RaisedIssue) {
+    const today = new Date().toISOString().slice(0, 10);
+    setDateOverrideModal({
+      kind: "issue",
+      issueId: issue.id,
+      label: issue.title,
+      startDate: issue.date_started ?? issue.date_raised,
+      endDate: today,
+    });
+    setResolveMenuIssue(null);
+  }
+
+  async function resolveIssueWithDates(issueId: string, dates: { start: string; end: string }) {
+    const patch: Partial<RaisedIssue> = { status: "resolved", date_started: dates.start, date_resolved: dates.end };
+    const { error } = await supabase.from("raised_issues").update(patch).eq("id", issueId);
+    if (!error) {
+      setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, ...patch } : i)));
+      fireCompletionToast(undefined, true);
+    }
+  }
+
+  async function markTaskDone(taskTitle: string, dateOverride?: { start: string; end: string }) {
     setActionLoading(taskTitle);
     const today = new Date().toISOString().slice(0, 10);
     const affected = entries
@@ -876,11 +918,12 @@ export default function ProjectDashboard() {
       setActionLoading(null);
       return;
     }
-    const startDate = affected[0].date;
+    const startDate = dateOverride?.start ?? affected[0].date;
+    const endDate = dateOverride?.end ?? today;
     const dateRange =
-      startDate === today
-        ? formatDateShort(today)
-        : `${formatDateShort(startDate)} → ${formatDateShort(today)}`;
+      startDate === endDate
+        ? formatDateShort(startDate)
+        : `${formatDateShort(startDate)} → ${formatDateShort(endDate)}`;
     const taskMeta = affected[0]?.tasks.find(t => t.title === taskTitle && t.status === "progress");
     try {
       for (const entry of affected) {
@@ -1511,6 +1554,10 @@ export default function ProjectDashboard() {
                                               className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-amber-400 hover:bg-amber-400/10 transition-colors border-t border-slate-800">
                                               <Rocket size={12} /> For Deployment
                                             </button>
+                                            <button onClick={() => openIssueDateOverrideModal(issue)}
+                                              className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-sky-400 hover:bg-sky-400/10 transition-colors border-t border-slate-800">
+                                              <Calendar size={12} /> Edit Dates &amp; Mark Resolved
+                                            </button>
                                           </div>
                                         )}
                                       </div>
@@ -1633,6 +1680,12 @@ export default function ProjectDashboard() {
                                           className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-amber-400 hover:bg-amber-400/10 transition-colors border-t border-slate-800"
                                         >
                                           <Rocket size={12} /> For Deployment
+                                        </button>
+                                        <button
+                                          onClick={() => openDateOverrideModal(item.task.title)}
+                                          className="flex items-center gap-2 px-3 py-2.5 text-[11px] text-sky-400 hover:bg-sky-400/10 transition-colors border-t border-slate-800"
+                                        >
+                                          <Calendar size={12} /> Edit Dates &amp; Mark Done
                                         </button>
                                       </div>
                                     )}
@@ -2779,6 +2832,72 @@ export default function ProjectDashboard() {
           <span className="text-emerald-400"> Christ</span> who stengthens me.
         </p>
       </div>
+
+      {/* ── Edit dates & mark done ── */}
+      {dateOverrideModal && (
+        <div
+          onClick={() => setDateOverrideModal(null)}
+          className="fixed inset-0 z-60 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl border border-sky-800/40 bg-slate-900 shadow-2xl p-5 flex flex-col gap-4"
+          >
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-2 text-[11px] font-bold tracking-[0.2em] uppercase text-sky-400">
+                <Calendar size={13} /> Edit Dates &amp; Mark {dateOverrideModal.kind === "issue" ? "Resolved" : "Done"}
+              </span>
+              <button onClick={() => setDateOverrideModal(null)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-[12px] text-slate-400 leading-snug">{dateOverrideModal.label}</p>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Start Date</span>
+                <input
+                  type="date"
+                  value={dateOverrideModal.startDate}
+                  onChange={(e) => setDateOverrideModal((m) => m && { ...m, startDate: e.target.value })}
+                  className="rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs px-2.5 py-1.5 outline-none [color-scheme:dark] focus:border-sky-700/60"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">End Date</span>
+                <input
+                  type="date"
+                  value={dateOverrideModal.endDate}
+                  onChange={(e) => setDateOverrideModal((m) => m && { ...m, endDate: e.target.value })}
+                  className="rounded-lg border border-slate-700 bg-slate-950 text-slate-200 text-xs px-2.5 py-1.5 outline-none [color-scheme:dark] focus:border-sky-700/60"
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                onClick={() => setDateOverrideModal(null)}
+                className="text-[11px] px-3 py-1.5 rounded-lg border border-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const { startDate, endDate } = dateOverrideModal;
+                  if (dateOverrideModal.kind === "issue") {
+                    resolveIssueWithDates(dateOverrideModal.issueId, { start: startDate, end: endDate });
+                  } else {
+                    markTaskDone(dateOverrideModal.taskTitle, { start: startDate, end: endDate });
+                  }
+                  setDateOverrideModal(null);
+                }}
+                disabled={!dateOverrideModal.startDate || !dateOverrideModal.endDate || dateOverrideModal.startDate > dateOverrideModal.endDate}
+                className="text-[11px] px-3 py-1.5 rounded-lg border border-emerald-700/50 bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ✓ Mark {dateOverrideModal.kind === "issue" ? "Resolved" : "Done"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {zoomSrc && (
         <div
